@@ -1,5 +1,33 @@
 # AMG65 RGB Controller
 
+> **English summary** — Open-source driver for the **LEOBOG AMG65** keyboard on Windows.
+> Controls the per-key RGB and the 63×5 LED matrix over USB HID, with no firmware flashing.
+> The protocol was reverse-engineered from `DeviceDriver.exe` 1.0.3.2 packet captures.
+>
+> **What it does:** 20 built-in firmware lighting effects, per-key colours, and live or
+> stored animations on the LED matrix — a clock, an audio spectrum analyser driven by
+> WASAPI loopback, Windows now-playing text, a system monitor, and playable games.
+> Scenes render to a plain canvas and can be previewed in the terminal, so you can
+> develop without the keyboard attached.
+>
+> **Key findings from the reverse engineering** (details in `AMG65_REVERSE_ENGINEERING.md`,
+> written in Thai):
+> - The matrix is **63×5 = 315 pixels**, but device memory order is *not* left-to-right.
+>   It is four row-major 14×5 blocks followed by a separate 7×5 right panel.
+> - **Live streaming tops out at ~5-6 FPS.** Sending faster makes the device *silently
+>   drop reports* — `hid_write` still returns success — which shifts the remaining data by
+>   64 bytes (21.3 pixels) and scatters pixels to wrong positions. Push harder and the
+>   HID output endpoint wedges permanently until you unplug and replug the cable.
+>   Both vendor endpoints (`MI_02` and `MI_03`) can wedge this way.
+> - **Byte 2 of the upload header (`0x0C`) is a per-frame delay, 10 ms per unit.**
+>   The official software hardcodes it to 8.3 FPS — but the panel runs at up to **83 FPS**.
+>   Uploading an animation into the device is therefore ~15× smoother than streaming,
+>   and it keeps playing with no host process running at all.
+>
+> Quick start: `pip install -r requirements.txt`, then `python -m amg65 doctor`,
+> `python -m amg65 list`, `python -m amg65 show clock`.
+> Full documentation below is in Thai. MIT licensed.
+
 ควบคุมไฟและจอ LED ของคีย์บอร์ด **LEOBOG AMG65** ผ่าน USB HID บน Windows
 โปรโตคอลถอดจากแพ็กเก็ตของ `DeviceDriver.exe` 1.0.3.2 โดยตรง **ไม่แฟลชและไม่แก้เฟิร์มแวร์**
 
