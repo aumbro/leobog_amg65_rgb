@@ -76,6 +76,39 @@ def find_path(channel: str = "control") -> bytes:
     )
 
 
+class AlreadyRunning(RuntimeError):
+    pass
+
+
+# ใช้ socket แทนไฟล์ล็อก เพราะระบบปฏิบัติการคืน port ให้เองเมื่อโปรเซสตาย
+# ไม่มีปัญหาไฟล์ล็อกค้างตอนโปรแกรมถูกฆ่า
+_LOCK_PORT = 47865
+_lock_socket = None
+
+
+def claim_exclusive() -> None:
+    """กันไม่ให้มีสองโปรเซสยิงเข้า endpoint เดียวกันพร้อมกัน
+
+    สองโปรเซสที่เขียน MI_02 พร้อมกันคือวิธีทำให้ endpoint ค้างที่ง่ายที่สุด
+    และเป็นความผิดพลาดที่เกิดซ้ำได้ง่ายมาก (เปิด tray ทิ้งไว้แล้วลืม แล้วสั่ง show)
+    """
+    global _lock_socket
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", _LOCK_PORT))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        raise AlreadyRunning(
+            "มีโปรแกรม amg65 อีกตัวรันอยู่แล้ว\n"
+            "  สองโปรเซสยิงเข้า endpoint เดียวกันจะทำให้ค้างจนต้องถอดสาย\n"
+            "  ปิดตัวเดิมก่อน (ถ้าเป็น tray ให้กดเมนู 'ออก')"
+        )
+    _lock_socket = sock  # ถือไว้ตลอดอายุโปรเซส
+
+
 class Link:
     """ถือ HID handle หนึ่งช่อง พร้อม retry และเปิดใหม่อัตโนมัติ."""
 

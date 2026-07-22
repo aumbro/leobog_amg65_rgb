@@ -6,7 +6,15 @@ import sys
 import time
 
 from . import scenes
-from .device import CONTROL_REPORT_BYTES, DeviceNotFound, EndpointStalled, Link, find_path
+from .device import (
+    CONTROL_REPORT_BYTES,
+    AlreadyRunning,
+    DeviceNotFound,
+    EndpointStalled,
+    Link,
+    claim_exclusive,
+    find_path,
+)
 from .engine import Engine, MatrixSink, MultiSink, PreviewSink
 from .keyboard import KEY_INDEX, MODES, KeyboardLight
 from .matrix import Matrix
@@ -379,6 +387,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# คำสั่งที่เขียนเข้าอุปกรณ์จริง ต้องมีตัวเดียวในระบบ
+_EXCLUSIVE = {"show", "tray", "upload", "keys", "light"}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # ธงที่แปลว่า "ไม่แตะอุปกรณ์" — คำสั่งพวกนี้รันพร้อมกับตัวที่ถือล็อกอยู่ได้
+    offline = any(
+        getattr(args, flag, False) for flag in ("dry_run", "no_device", "no_upload")
+    )
+    if args.command in _EXCLUSIVE and not offline:
+        try:
+            claim_exclusive()
+        except AlreadyRunning as exc:
+            print(exc)
+            return 2
     return args.func(args)
