@@ -108,6 +108,8 @@ def cmd_show(args: argparse.Namespace) -> int:
                 packet_delay=args.delay / 1000.0,
                 header_every_frame=not args.lean,
                 flush_every_frame=not args.lean,
+                data_delay=None if args.delay_data is None else args.delay_data / 1000.0,
+                command_delay=None if args.delay_cmd is None else args.delay_cmd / 1000.0,
             )
             sinks.append(MatrixSink(matrix))
         except (OSError, DeviceNotFound) as exc:
@@ -187,6 +189,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--seconds", type=float, default=None, help="เล่นกี่วินาทีแล้วออก")
     p_show.add_argument("--text", help="ข้อความสำหรับ scene marquee")
     p_show.add_argument("--delay", type=float, default=8.5, help="หน่วงระหว่าง HID packet (ms)")
+    p_show.add_argument(
+        "--delay-data", type=float, default=None,
+        help="หน่วงเฉพาะระหว่าง RGB 15 reports (ms) — ไม่ระบุ = ใช้ค่า --delay",
+    )
+    p_show.add_argument(
+        "--delay-cmd", type=float, default=None,
+        help="หน่วงเฉพาะหลังคำสั่ง 04 18 / 04 35 / flush / 04 02 (ms)",
+    )
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
 

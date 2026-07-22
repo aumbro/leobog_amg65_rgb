@@ -93,7 +93,51 @@ def sweep(link: Link, seconds: float) -> None:
     print("ยืนยันค่าที่จะใช้จริงด้วย soak ยาว ๆ: python bench_fps.py --soak 4 --seconds 180")
 
 
-def soak(link: Link, delay_ms: float, seconds: float, lean: bool) -> None:
+def split_sweep(link: Link, seconds: float, command_ms: float) -> None:
+    """ตรึง delay ของคำสั่งไว้ที่ค่าที่รู้ว่าปลอดภัย แล้วไล่ลดเฉพาะ delay ของข้อมูล
+
+    สมมติฐาน: RGB 15 reports แค่ยัดข้อมูลลงบัฟเฟอร์ ไม่ต้องรอเท่าคำสั่ง apply
+    ถ้าจริง ค่า data ต่ำ ๆ จะยังภาพสวยอยู่ ทั้งที่ตอนลดพร้อมกันทั้งสองค่าแล้วพัง
+
+    ต้องดูด้วยตา: อาการคือ "ดอตโผล่ผิดตำแหน่งบางจังหวะ" ซึ่งเกิดตอนเครื่องทิ้ง
+    report เงียบ ๆ แล้วข้อมูลที่เหลือเลื่อนไป 64 ไบต์ = 21.3 พิกเซล
+    """
+    matrix = Matrix(link, packet_delay=command_ms / 1000.0)
+    print(f"ตรึง delay-cmd = {command_ms} ms แล้วไล่ delay-data ช้า→เร็ว อันละ {seconds:.0f} วินาที")
+    print("ดูว่าเริ่มมี 'ดอตโผล่ผิดตำแหน่ง' ตอนช่วงที่เท่าไร\n")
+    for count in (3, 2, 1):
+        print(f"  เริ่มใน {count}...", flush=True)
+        matrix.show(bar_canvas(count * 9))
+        time.sleep(1.0)
+
+    for data_ms in sorted(DELAYS_MS, reverse=True):
+        print(f">>> delay-data {data_ms:>4.1f} ms ...", end=" ", flush=True)
+        matrix = Matrix(
+            link,
+            data_delay=data_ms / 1000.0,
+            command_delay=command_ms / 1000.0,
+        )
+        fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
+        print(f"{fps:.1f} FPS" + (f", เฟรมหลุด {drops}" if drops else ""))
+        if stalled:
+            print(f"\nendpoint ค้างที่ delay-data {data_ms} ms — จบการทดลอง ต้องถอดสายเสียบใหม่")
+            return
+        try:
+            matrix.show(Canvas())
+        except EndpointStalled:
+            print(f"\nendpoint ค้างหลังจบช่วง {data_ms} ms — ต้องถอดสายเสียบใหม่")
+            return
+        time.sleep(0.6)
+
+
+def soak(
+    link: Link,
+    delay_ms: float,
+    seconds: float,
+    lean: bool,
+    data_ms: float | None = None,
+    command_ms: float | None = None,
+) -> None:
     """ทดสอบค่าเดียวยาว ๆ — วิธีเดียวที่เชื่อได้ เพราะการค้างเกิดแบบสุ่ม
 
     การกวาดสั้น ๆ หลอกได้ง่าย: รอบแรกไล่ถึง delay 0 ได้โดยไม่มีอะไรค้าง
@@ -104,16 +148,24 @@ def soak(link: Link, delay_ms: float, seconds: float, lean: bool) -> None:
         packet_delay=delay_ms / 1000.0,
         header_every_frame=not lean,
         flush_every_frame=not lean,
+        data_delay=None if data_ms is None else data_ms / 1000.0,
+        command_delay=None if command_ms is None else command_ms / 1000.0,
     )
-    print(f"soak: delay {delay_ms} ms, สูตร {'minimal' if lean else 'full'}, นาน {seconds:.0f} วินาที")
+    label = (
+        f"delay {delay_ms} ms"
+        if data_ms is None and command_ms is None
+        else f"data {matrix.data_delay * 1000:.1f} ms / cmd {matrix.command_delay * 1000:.1f} ms"
+    )
+    print(f"soak: {label}, สูตร {'minimal' if lean else 'full'}, นาน {seconds:.0f} วินาที")
     started = time.perf_counter()
     fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
     elapsed = time.perf_counter() - started
     if stalled:
-        print(f"\n✗ ค้างที่วินาทีที่ {elapsed:.0f} — delay {delay_ms} ms เร็วเกินไป ใช้ไม่ได้")
+        print(f"\n✗ ค้างที่วินาทีที่ {elapsed:.0f} — {label} เร็วเกินไป ใช้ไม่ได้")
         print("  ถอดสาย USB เสียบใหม่ แล้วลองค่าที่สูงกว่านี้")
     else:
-        print(f"\n✓ ผ่าน {elapsed:.0f} วินาที ที่ {fps:.1f} FPS" + (f" (เฟรมหลุด {drops})" if drops else ""))
+        print(f"\n✓ ไม่ค้างตลอด {elapsed:.0f} วินาที ที่ {fps:.1f} FPS" + (f" (เฟรมหลุด {drops})" if drops else ""))
+        print("  เหลือเรื่องที่โปรแกรมตอบไม่ได้: มีดอตโผล่ผิดตำแหน่งไหม — ต้องใช้ตาดู")
 
 
 def visual(link: Link, seconds: float, recipe: str) -> None:
@@ -170,12 +222,23 @@ def main() -> int:
         help="ทดสอบ delay ค่าเดียวยาว ๆ ว่า endpoint ค้างไหม (วิธีที่เชื่อได้ที่สุด)",
     )
     parser.add_argument("--lean", action="store_true", help="ใช้สูตร minimal 16 reports ตอน --soak")
+    parser.add_argument(
+        "--split", action="store_true",
+        help="ตรึง delay ของคำสั่ง แล้วไล่ลดเฉพาะ delay ของข้อมูล (ต้องดูด้วยตา)",
+    )
+    parser.add_argument("--delay-data", type=float, default=None, help="หน่วงเฉพาะ RGB 15 reports (ms)")
+    parser.add_argument("--delay-cmd", type=float, default=8.5, help="หน่วงเฉพาะคำสั่ง (ms)")
     args = parser.parse_args()
 
     try:
         with Link("control") as link:
-            if args.soak is not None:
-                soak(link, args.soak, max(args.seconds, 30.0), args.lean)
+            if args.split:
+                split_sweep(link, max(args.seconds, 6.0), args.delay_cmd)
+            elif args.soak is not None:
+                soak(
+                    link, args.soak, max(args.seconds, 30.0), args.lean,
+                    args.delay_data, args.delay_cmd if args.delay_data is not None else None,
+                )
             elif args.visual:
                 visual(link, max(args.seconds, 6.0), args.recipe)
             else:

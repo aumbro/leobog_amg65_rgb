@@ -142,8 +142,19 @@ class Matrix:
     ลำดับต่อหนึ่งเฟรม (ของเดิม 19 reports):
         04 18 → 04 35 (byte 8 = 0F) → RGB 15 reports → zero flush → 04 02
 
-    `header_every_frame` / `flush_every_frame` / `packet_delay` เปิดให้ปรับได้
-    เพราะจำนวน report กับ delay คือคอขวด FPS ทั้งหมด — ดู bench_fps.py
+    delay แยกสองค่าเพราะ 19 packet ในหนึ่งเฟรมทำงานคนละอย่าง:
+
+        command_delay  หลัง 04 18 / 04 35 / flush / 04 02
+                       เป็นคำสั่งเปลี่ยนสถานะและ apply ทั้งเฟรม = งานหนักฝั่งเฟิร์มแวร์
+        data_delay     ระหว่าง RGB 15 reports
+                       แค่ยัดข้อมูลลงบัฟเฟอร์ น่าจะต้องการเวลาน้อยกว่ามาก
+
+    สมมติฐาน: หน่วง 8.5 ms ระหว่างข้อมูล 15 ก้อน = เสียเปล่า 127 ms ต่อเฟรม
+    ถ้าจริง ลด data_delay อย่างเดียวจะได้ FPS เพิ่มโดยภาพไม่เสีย
+
+    ⚠️ ส่งถี่เกินไปเครื่องจะ **ทิ้ง report เงียบ ๆ** โดย hid_write ยังคืน 65 ปกติ
+    ผลคือข้อมูลที่เหลือเลื่อนไป 64 ไบต์ = 21.3 พิกเซล พิกเซลไปโผล่ผิดตำแหน่ง
+    (อาการ "ดอตอื่นโผล่มาบางจังหวะ") โปรแกรมตรวจไม่ได้ ต้องยืนยันด้วยตา
     """
 
     def __init__(
@@ -152,12 +163,20 @@ class Matrix:
         packet_delay: float = 0.0085,
         header_every_frame: bool = True,
         flush_every_frame: bool = True,
+        data_delay: float | None = None,
+        command_delay: float | None = None,
     ) -> None:
         self.link = link
-        self.packet_delay = packet_delay
+        self.data_delay = packet_delay if data_delay is None else data_delay
+        self.command_delay = packet_delay if command_delay is None else command_delay
         self.header_every_frame = header_every_frame
         self.flush_every_frame = flush_every_frame
         self._stream_ready = False
+
+    @property
+    def packet_delay(self) -> float:
+        """ค่าที่ช้าที่สุดในสองค่า — ใช้รายงานผลเวลาไม่ได้แยก."""
+        return max(self.data_delay, self.command_delay)
 
     # ---------- live stream ----------
 
@@ -175,9 +194,9 @@ class Matrix:
     def enter_stream(self) -> None:
         """เข้าโหมด stream ครั้งเดียว (ใช้ตอน header_every_frame = False)."""
         self.link.send(self._begin_payload())
-        time.sleep(self.packet_delay)
+        time.sleep(self.command_delay)
         self.link.send(self._stream_payload())
-        time.sleep(self.packet_delay)
+        time.sleep(self.command_delay)
         self._stream_ready = True
 
     def show(self, canvas: Canvas) -> None:
@@ -186,21 +205,20 @@ class Matrix:
     def show_raw(self, raw: bytes | bytearray) -> None:
         if len(raw) != 960:
             raise ValueError("payload ของเฟรมต้องยาว 960 ไบต์")
-        delay = self.packet_delay
         try:
             if self.header_every_frame:
                 self.link.send(self._begin_payload())
-                time.sleep(delay)
+                time.sleep(self.command_delay)
                 self.link.send(self._stream_payload())
-                time.sleep(delay)
+                time.sleep(self.command_delay)
             elif not self._stream_ready:
                 self.enter_stream()
             for offset in range(0, 960, 64):
                 self.link.send(raw[offset : offset + 64])
-                time.sleep(delay)
+                time.sleep(self.data_delay)
             if self.flush_every_frame:
                 self.link.send(bytes(64))
-                time.sleep(delay)
+                time.sleep(self.command_delay)
             self.link.send(CMD_APPLY)
         except OSError:
             # Link retry หมดแล้วยังไม่ผ่าน — ถือว่าหลุดโหมด ต้องเข้าใหม่รอบหน้า
