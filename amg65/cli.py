@@ -137,6 +137,15 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 1 if stalled else 0
 
 
+def cmd_tray(args: argparse.Namespace) -> int:
+    try:
+        from .tray import Tray
+    except ImportError as exc:
+        print(f"tray ต้องใช้ pystray กับ pillow — pip install pystray pillow\n  ({exc})")
+        return 2
+    return Tray(args.scene, args.delay).run()
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     """เบคเฟรมแล้วเก็บลงเครื่อง — เล่นวนเองโดยไม่ต้องมีโปรแกรมค้าง"""
     from . import bake
@@ -304,6 +313,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
+
+    p_tray = sub.add_parser("tray", help="ไอคอนถาดระบบ สลับ scene ได้ ไม่ต้องเปิดคอนโซลค้าง")
+    p_tray.add_argument("--scene", choices=tuple(scenes.REGISTRY), default="clock")
+    p_tray.add_argument("--delay", type=float, default=8.5, help="หน่วงระหว่าง HID packet (ms)")
+    p_tray.set_defaults(func=cmd_tray)
 
     p_upload = sub.add_parser(
         "upload", help="เบคเฟรมเก็บลงเครื่อง แล้วเฟิร์มแวร์เล่นวนเอง (ลื่นกว่า stream)"

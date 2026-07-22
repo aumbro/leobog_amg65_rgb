@@ -40,8 +40,12 @@ CMD_STREAM = b"\x04\x35"
 TRAILER = b"\xAA\x55"
 
 
-class DeviceNotFound(RuntimeError):
-    pass
+class DeviceNotFound(OSError):
+    """ยังหา endpoint ไม่เจอ — สืบทอด OSError เพราะเป็นสภาพชั่วคราวได้
+
+    (ถอดสายอยู่ / กำลังเสียบใหม่) โค้ดที่วนวาดเฟรมจึงจับรวมกับ write ที่พลาดได้เลย
+    แล้วปล่อยเฟรมนั้นตกไป ไม่ต้องแยกเคสเอง
+    """
 
 
 class EndpointStalled(OSError):
@@ -105,7 +109,11 @@ class Link:
             self.dev = None
 
     def reopen(self, timeout: float = 10.0) -> None:
-        """ปิดแล้วเปิดใหม่ ใช้ตอน endpoint ค้าง; วนรอถ้าคีย์บอร์ดถูกถอดสาย."""
+        """ปิดแล้วเปิด handle ใหม่ วนรอจนกว่าจะเจออุปกรณ์หรือครบ timeout
+
+        จำเป็นเพราะ **HID path เปลี่ยนทุกครั้งที่เสียบสายใหม่** handle เดิมจึงใช้ต่อไม่ได้
+        `timeout=0.0` = ลองครั้งเดียวแล้วเลิก (ใช้ในลูปวาดเฟรม ไม่ควรบล็อกนาน)
+        """
         if self.dry_run:
             return
         self.close()
@@ -131,7 +139,9 @@ class Link:
         written = -1
         for attempt in range(retries):
             if self.dev is None:
-                self.reopen()
+                # เปิดสั้น ๆ พอ — ถ้ายังไม่มีอุปกรณ์ ปล่อยให้เฟรมนี้ตกไปแล้วลองใหม่เฟรมหน้า
+                # ดีกว่าบล็อกลูปวาดไว้เป็นสิบวินาที
+                self.reopen(timeout=0.0)
             started = time.perf_counter()
             try:
                 assert self.dev is not None
@@ -155,6 +165,9 @@ class Link:
                     f"  {hint}\n"
                     "  แก้ตอนนี้: ถอดสาย USB เสียบใหม่ แล้วรัน `python -m amg65 doctor`"
                 )
+            # พลาดแบบทันที = อุปกรณ์หายไปหรือเพิ่งถูกเสียบใหม่ (HID path เปลี่ยนทุกครั้ง
+            # ที่เสียบ) handle เดิมใช้ต่อไม่ได้แล้ว ต้องทิ้งแล้วเปิดใหม่ ไม่ใช่ retry เฉย ๆ
+            self.close()
             if attempt < retries - 1:
                 time.sleep(0.020)
         raise OSError(
