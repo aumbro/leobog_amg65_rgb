@@ -143,9 +143,16 @@ class Link:
             # write ที่บล็อกจนครบ timeout = endpoint ค้าง; retry/reopen ไม่ช่วย
             # (พิสูจน์แล้วว่าเปิด handle ใหม่ก็ยังค้าง) มีแต่เสีย 1 วินาทีต่อครั้ง
             if time.perf_counter() - started >= STALL_SECONDS:
+                # คำแนะนำต่างกันตามช่อง: control หน่วงด้วย --delay, bulk ด้วย --chunk-delay
+                hint = (
+                    "ส่ง frame ถี่เกินกว่าที่อุปกรณ์ระบายทัน — เพิ่มค่า --delay"
+                    if self.channel == "control"
+                    else "ส่งก้อนข้อมูลถี่เกินไป — เพิ่มค่า --chunk-delay หรือลดจำนวนเฟรม"
+                )
+                interface = CONTROL_INTERFACE if self.channel == "control" else BULK_INTERFACE
                 raise EndpointStalled(
-                    f"endpoint {self.channel} (MI_0{CONTROL_INTERFACE if self.channel == 'control' else BULK_INTERFACE}) ค้าง\n"
-                    "  เกิดจากส่งถี่เกินกว่าที่อุปกรณ์ระบายทัน — เพิ่มค่า --delay\n"
+                    f"endpoint {self.channel} (MI_0{interface}) ค้าง\n"
+                    f"  {hint}\n"
                     "  แก้ตอนนี้: ถอดสาย USB เสียบใหม่ แล้วรัน `python -m amg65 doctor`"
                 )
             if attempt < retries - 1:

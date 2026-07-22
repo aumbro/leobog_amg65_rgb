@@ -140,16 +140,38 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_upload(args: argparse.Namespace) -> int:
     """เบคเฟรมแล้วเก็บลงเครื่อง — เล่นวนเองโดยไม่ต้องมีโปรแกรมค้าง"""
     from . import bake
+    from .matrix import fps_for_speed, speed_for_fps
 
     if bool(args.source) == bool(args.scene):
         print("ต้องระบุอย่างใดอย่างหนึ่ง: ไฟล์ภาพ/GIF หรือ --scene")
         return 2
 
+    # --play-fps คือหน้าบ้านของไบต์ speed; ผูกกับ FPS ที่ใช้เรนเดอร์ด้วย
+    # ไม่งั้นภาพจะเคลื่อนที่เร็ว/ช้าไม่ตรงกับที่ scene ออกแบบไว้
+    speed = args.speed if args.play_fps is None else speed_for_fps(args.play_fps)
+    # ⚠️ ต้องเรนเดอร์ด้วย FPS *จริง* ที่เครื่องจะเล่น ไม่ใช่ค่าที่ขอมา
+    # ไบต์ speed เป็นจำนวนเต็มหน่วยละ 10 ms ค่าที่ขอจึงมักถูกปัด (ขอ 33 ได้จริง 31.2)
+    # ถ้าเรนเดอร์ด้วยค่าที่ขอ ภาพจะเลื่อนไม่ครบรอบแล้วกระโดดทุกครั้งที่วนลูป
+    render_fps = args.render_fps or fps_for_speed(speed)
+
     try:
         if args.scene:
-            kwargs = {"text": args.text} if args.scene == "marquee" and args.text else {}
+            kwargs = {}
+            frame_count = args.frames or 60
+            if args.scene in ("marquee", "nowplaying"):
+                if args.text:
+                    kwargs["text"] = args.text
+                chosen = args.scroll_speed
+                if chosen is None and args.text:
+                    # เลือกความเร็วที่ทำให้ข้อความเลื่อนครบหนึ่งรอบพอดีในจำนวนเฟรมที่มี
+                    # ไม่งั้นเฟรมสุดท้ายกับเฟรมแรกไม่ต่อกัน แล้วภาพกระโดดทุกครั้งที่วนลูป
+                    chosen = bake.seamless_scroll_speed(args.text, frame_count, render_fps)
+                    if chosen:
+                        print(f"เลือกความเร็วเลื่อนอัตโนมัติ {chosen:.1f} px/วินาที (ลูปต่อเนียนพอดี)")
+                if chosen:
+                    kwargs["speed"] = chosen
             frames = bake.frames_from_scene(
-                args.scene, args.frames or 60, args.render_fps, args.brightness, **kwargs
+                args.scene, frame_count, render_fps, args.brightness, **kwargs
             )
         else:
             # ไฟล์ภาพมีจำนวนเฟรมของมันเองอยู่แล้ว ไม่ระบุ = เอาทั้งหมดเท่าที่โควตาไหว
@@ -163,10 +185,24 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
     size = bake.payload_size(len(frames))
     chunks = (size + 4095) // 4096
+    actual_fps = fps_for_speed(speed)
     print(
         f"ได้ {len(frames)} เฟรม, payload {size:,} ไบต์ = {chunks} ก้อน"
         f" (อัปโหลดราว {chunks * 0.17:.1f} วินาที)"
     )
+    print(
+        f"เล่นที่ speed 0x{speed:02X} = {actual_fps:.1f} FPS"
+        f" → ลูปยาว {len(frames) / actual_fps:.1f} วินาที"
+    )
+    if args.play_fps and abs(actual_fps - args.play_fps) / args.play_fps > 0.15:
+        # ไบต์ speed เป็นจำนวนเต็มหน่วยละ 10 ms ค่า FPS สูง ๆ จึงปัดแล้วเพี้ยนได้เยอะ
+        print(f"  (ขอ {args.play_fps:.0f} FPS แต่ปัดลงหน่วย 10 ms ได้ {actual_fps:.1f})")
+    if chunks > bake.SAFE_CHUNKS:
+        print(
+            f"⚠️  {chunks} ก้อนเกินเส้นที่ทดสอบแล้วว่าเชื่อถือได้ ({bake.SAFE_CHUNKS} ก้อน)\n"
+            f"   58 ก้อนเคยพัง 3 ครั้งติด (endpoint ค้าง 1 + ภาพเพี้ยน 2)\n"
+            f"   ถ้าภาพออกมาเพี้ยน ให้ลด --frames ลง แล้วชดเชยด้วยการลด --play-fps"
+        )
 
     if args.preview:
         from . import preview
@@ -192,8 +228,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
             matrix = Matrix(control)
             print("กำลังอัปโหลด ...")
             matrix.upload_animation(
-                bulk, frames, speed=args.speed,
+                bulk, frames, speed=speed,
                 on_progress=lambda done, total: print(f"  {done}/{total}", end="\r", flush=True),
+                chunk_delay=args.chunk_delay / 1000.0,
             )
         print("\nอัปโหลดเสร็จ — เฟิร์มแวร์เล่นวนเองแล้ว ปิดโปรแกรมได้เลย")
     except EndpointStalled as exc:
@@ -283,10 +320,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--fit", choices=("cover", "fit", "stretch"), default="cover",
         help="วิธีย่อภาพลงจอ 63x5 (จออัตราส่วน 12.6:1)",
     )
-    p_upload.add_argument("--text", help="ข้อความ ถ้าเบชจาก scene marquee")
+    p_upload.add_argument("--text", help="ข้อความ ถ้าเบคจาก scene marquee")
+    p_upload.add_argument(
+        "--scroll-speed", type=float, default=None,
+        help="ความเร็วเลื่อนข้อความ พิกเซล/วินาที — ยิ่งเล่นเร็วยิ่งต้องเลื่อนเร็วตาม "
+             "ไม่งั้นลูปยาวเกิน 255 เฟรมแล้วภาพกระโดด",
+    )
+    p_upload.add_argument(
+        "--play-fps", type=float, default=None,
+        help="ความเร็วเล่นบนเครื่อง 2-83 FPS (ใช้เป็น FPS ตอนเรนเดอร์ scene ด้วย)",
+    )
     p_upload.add_argument(
         "--speed", type=lambda s: int(s, 0), default=0x0C,
-        help="ไบต์ที่ 2 ของ header ที่ยังไม่รู้ความหมาย (ทางการใช้ 0x0C)",
+        help="ค่าหน่วงต่อเฟรมดิบ หน่วยละ 10 ms (ทางการใช้ 0x0C = 8.3 FPS); --play-fps ทับค่านี้",
+    )
+    p_upload.add_argument(
+        "--chunk-delay", type=float, default=170.0,
+        help="หน่วงระหว่างก้อนข้อมูล 4KB (ms) — เพิ่มถ้า MI_03 ค้างบ่อย",
     )
     p_upload.add_argument("--preview", action="store_true", help="ดูเฟรมในเทอร์มินัลก่อน")
     p_upload.add_argument("--preview-loops", type=int, default=2, help="วนดูกี่รอบ")

@@ -13,6 +13,11 @@ from .matrix import HEIGHT, WIDTH, Canvas
 
 MAX_FRAMES = 255  # จำนวนเฟรมสูงสุดที่ header รองรับ (byte เดียว)
 
+# เพดานที่ "ส่งได้" กับที่ "ส่งแล้วเชื่อถือได้" ไม่เท่ากัน
+# ผลจริง: 35 ก้อนผ่าน, 47 ก้อนผ่าน, 58 ก้อนพัง 3 ครั้งติด (ค้าง 1 + ภาพเพี้ยน 2)
+# 59 ก้อนเคยผ่านครั้งเดียวจึงยังเชื่อไม่ได้ ตั้งเส้นเตือนไว้ที่ 47 ก้อน
+SAFE_CHUNKS = 47
+
 
 def _to_canvas(image, brightness: float) -> Canvas:
     """PIL RGB image ขนาด 63×5 → Canvas."""
@@ -121,6 +126,26 @@ def frames_from_scene(
         return baked
     finally:
         scene.stop()
+
+
+def seamless_scroll_speed(text: str, frame_count: int, play_fps: float) -> float | None:
+    """ความเร็วเลื่อน (px/วินาที) ที่ทำให้ข้อความวนครบรอบพอดีในจำนวนเฟรมที่มี
+
+    ทั้งสามค่านี้ผูกกันเป็นสมการเดียว เลือกได้แค่สองค่า ค่าที่สามถูกบังคับ:
+
+        จำนวนเฟรม = ระยะทางที่ต้องเลื่อน ÷ ความเร็วเลื่อน × FPS ที่เล่น
+
+    ถ้าไม่พอดี เฟรมสุดท้ายกับเฟรมแรกจะไม่ต่อกัน แล้วภาพกระโดดทุกครั้งที่วนลูป
+    คืน None ถ้าข้อความสั้นกว่าจอ (กรณีนั้นจัดกลางอยู่นิ่ง ไม่ได้เลื่อน)
+    """
+    from . import font
+    from .scenes.nowplaying import GAP
+
+    width = font.text_width(text)
+    if width <= WIDTH:
+        return None
+    loop_seconds = frame_count / play_fps
+    return (width + GAP) / loop_seconds
 
 
 def payload_size(frame_count: int) -> int:

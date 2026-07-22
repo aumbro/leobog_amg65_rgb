@@ -27,6 +27,35 @@ RIGHT_WIDTH = 7   # แผงขวา x 56–62
 # ค่าช่องสีสูงสุด — โปรโตคอล live stream สงวน 0xFF ไว้ ห้ามส่ง
 MAX_CHANNEL = 0xFE
 
+# ไบต์ที่ 2 ของ header ตอนอัปโหลด = ค่าหน่วงต่อเฟรม หน่วยละ 10 ms
+# (โปรแกรมทางการใส่ 0x0C = 120 ms = 8.3 FPS มาตลอด ซึ่งไม่ใช่เพดาน)
+# วัดจริง: speed 1 -> 12 ms, speed 12 -> 120 ms, แต่ 96 -> 470 ms และ 255 -> 510 ms
+# เพราะเฟิร์มแวร์ตัดเพดานหน่วงไว้ราว 500 ms ค่าเกินกว่านั้นจึงไม่ช้าลงอีก
+# จับเวลาจริง 4 จุด (10 เฟรมต่อรอบ): speed 1 -> 12 ms, 12 -> 120, 96 -> 470, 255 -> 510
+# ฟิตได้ delay = min(10 x speed, 500) + 2   โดย 2 ms คือเวลาสลับเฟรมของเฟิร์มแวร์เอง
+FRAME_UNIT_MS = 10.0
+FRAME_OVERHEAD_MS = 2.0
+MAX_FRAME_DELAY_MS = 500.0
+SPEED_DEFAULT = 0x0C
+FASTEST_FPS = 1000.0 / (FRAME_UNIT_MS + FRAME_OVERHEAD_MS)  # ~83 FPS
+
+
+def frame_delay_ms(speed: int) -> float:
+    return min(speed * FRAME_UNIT_MS, MAX_FRAME_DELAY_MS) + FRAME_OVERHEAD_MS
+
+
+def speed_for_fps(fps: float) -> int:
+    """แปลง FPS ที่อยากได้เป็นค่าไบต์ speed (เร็วสุด ~83 FPS, ช้าสุด ~2 FPS)."""
+    if fps <= 0:
+        raise ValueError("fps ต้องมากกว่า 0")
+    target = min(max(1000.0 / fps - FRAME_OVERHEAD_MS, FRAME_UNIT_MS), MAX_FRAME_DELAY_MS)
+    return max(1, min(255, round(target / FRAME_UNIT_MS)))
+
+
+def fps_for_speed(speed: int) -> float:
+    """FPS จริงที่จะได้จากค่าไบต์ speed (คิดเพดานหน่วงและ overhead ให้แล้ว)."""
+    return 1000.0 / frame_delay_ms(speed)
+
 RGB = tuple[int, int, int]
 BLACK: RGB = (0, 0, 0)
 
@@ -231,8 +260,9 @@ class Matrix:
         self,
         bulk: Link,
         frames: list[Canvas],
-        speed: int = 0x0C,
+        speed: int = SPEED_DEFAULT,
         on_progress=None,
+        chunk_delay: float = 0.170,
     ) -> None:
         """เก็บภาพ/แอนิเมชันลงเครื่องผ่าน MI_03 — เล่นต่อได้เองแม้ปิดโปรแกรม
 
@@ -265,6 +295,8 @@ class Matrix:
             if on_progress is not None:
                 on_progress(index + 1, chunks)
             # report ใหญ่ต้องมีเวลาระบายผ่าน endpoint; โปรแกรมทางการเว้น ~160-167ms
-            time.sleep(0.170)
+            # ⚠️ MI_03 ค้างได้เหมือน MI_02 ถ้าส่งถี่เกิน และเป็นแบบสุ่ม —
+            # 59 ก้อนเคยผ่าน แต่ 58 ก้อนเคยค้าง เพิ่มค่านี้ถ้าเจอบ่อย
+            time.sleep(chunk_delay)
         self.link.send(CMD_APPLY)
         self.link.send(CMD_FINALIZE)
