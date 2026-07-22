@@ -14,6 +14,9 @@ from .base import Scene
 REGISTRY: dict[str, tuple[str, str, str, str]] = {
     "clock": (".clock", "ClockScene", "นาฬิกา HH:MM:SS + Space Invader", ""),
     "rainbow": (".rainbow", "RainbowScene", "ไล่สีรุ้งไหลทั้งจอ", ""),
+    "plasma": (".loops", "PlasmaScene", "คลื่นสีไหลนุ่ม วนลูปเนียน (เหมาะกับ upload)", ""),
+    "scanner": (".loops", "ScannerScene", "แถบไฟกวาดไปมามีหางจาง วนลูปเนียน", ""),
+    "bounce": (".loops", "BounceScene", "ลูกบอลเด้งทิ้งหางสีรุ้ง วนลูปเนียน", ""),
     "vis": (".vis", "VisualizerScene", "spectrum เต้นตามเสียงที่ลำโพงกำลังเล่น", "soundcard, numpy"),
     "nowplaying": (".nowplaying", "NowPlayingScene", "ชื่อเพลงวิ่ง + progress bar จาก SMTC", "winsdk"),
     "marquee": (".nowplaying", "MarqueeScene", "ข้อความวิ่งอะไรก็ได้ (--text)", ""),

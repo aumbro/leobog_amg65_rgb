@@ -13,10 +13,16 @@ from .matrix import HEIGHT, WIDTH, Canvas
 
 MAX_FRAMES = 255  # จำนวนเฟรมสูงสุดที่ header รองรับ (byte เดียว)
 
-# เพดานที่ "ส่งได้" กับที่ "ส่งแล้วเชื่อถือได้" ไม่เท่ากัน
-# ผลจริง: 35 ก้อนผ่าน, 47 ก้อนผ่าน, 58 ก้อนพัง 3 ครั้งติด (ค้าง 1 + ภาพเพี้ยน 2)
-# 59 ก้อนเคยผ่านครั้งเดียวจึงยังเชื่อไม่ได้ ตั้งเส้นเตือนไว้ที่ 47 ก้อน
-SAFE_CHUNKS = 47
+# เพดานที่ "ส่งได้" กับที่ "ส่งแล้วเชื่อถือได้" ไม่เท่ากัน และไม่มีเส้นตายชัด ๆ
+# ยิ่งใหญ่ยิ่งเสี่ยงแบบค่อย ๆ ไต่:
+#     35 ก้อน  ผ่าน 2/2
+#     44 ก้อน  ผ่าน 1/1
+#     47 ก้อน  ผ่าน 1/2   <- เคยตั้งเป็นเส้นปลอดภัย แล้วพังจริง
+#     58 ก้อน  ผ่าน 0/3   (ค้าง 1 + ภาพเพี้ยน 2)
+#     59 ก้อน  ผ่าน 1/1
+# เพิ่ม chunk_delay ไม่ช่วย — รอบที่พังที่ 47 ก้อนใช้ 220ms ส่วนรอบที่ผ่านใช้ 170ms
+# ตัวแปรจริงคือขนาดรวม ไม่ใช่ความถี่ที่ส่ง
+SAFE_CHUNKS = 40
 
 
 def _to_canvas(image, brightness: float) -> Canvas:
@@ -119,13 +125,38 @@ def frames_from_scene(
         baked = []
         for index in range(count):
             canvas = Canvas()
-            scene.render(canvas, index / rate, index)
+            if scene.loop_seconds:
+                # scene ที่วนได้: แบ่งลูปเป็น count ส่วนเท่า ๆ กัน เฟรมสุดท้ายจึงต่อ
+                # เฟรมแรกพอดีเสมอ ไม่ว่าจำนวนเฟรมจะปัดเป็นเลขอะไร
+                # (ถ้าเดินทีละ 1/FPS แล้วจำนวนเฟรมปัด ลูปจะเลยหรือขาดนิดหน่อยทุกครั้ง)
+                elapsed = scene.loop_seconds * index / count
+            else:
+                elapsed = index / rate
+            scene.render(canvas, elapsed, index)
             if brightness < 1.0:
                 canvas.scale_brightness(brightness)
             baked.append(canvas)
         return baked
     finally:
         scene.stop()
+
+
+def frames_for_loop(scene_name: str, play_fps: float) -> int | None:
+    """จำนวนเฟรมที่ทำให้ scene วนกลับมาพอดีที่ FPS นั้น
+
+    คืน None ถ้า scene ไม่ได้บอกความยาวลูปไว้ (คือมันไม่ได้วน)
+    ถ้าคำนวณแล้วเกินโควตา 255 เฟรม จะย่นให้เหลือ 255 ซึ่งลูปจะไม่พอดีอีกต่อไป
+    — กรณีนั้นควรลด FPS ลงแทน
+    """
+    from . import scenes
+
+    try:
+        loop_seconds = scenes.load(scene_name).loop_seconds
+    except (KeyError, ImportError):
+        return None
+    if not loop_seconds:
+        return None
+    return max(1, min(MAX_FRAMES, round(loop_seconds * play_fps)))
 
 
 def seamless_scroll_speed(text: str, frame_count: int, play_fps: float) -> float | None:

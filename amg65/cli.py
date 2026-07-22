@@ -174,7 +174,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
     try:
         if args.scene:
             kwargs = {}
-            frame_count = args.frames or 60
+            frame_count = args.frames or bake.frames_for_loop(args.scene, render_fps) or 60
+            if args.frames is None and frame_count != 60:
+                print(f"ใช้ {frame_count} เฟรม = ความยาวลูปของ scene พอดีที่ {render_fps:.1f} FPS")
             if args.scene in ("marquee", "nowplaying"):
                 if args.text:
                     kwargs["text"] = args.text
@@ -216,9 +218,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print(f"  (ขอ {args.play_fps:.0f} FPS แต่ปัดลงหน่วย 10 ms ได้ {actual_fps:.1f})")
     if chunks > bake.SAFE_CHUNKS:
         print(
-            f"⚠️  {chunks} ก้อนเกินเส้นที่ทดสอบแล้วว่าเชื่อถือได้ ({bake.SAFE_CHUNKS} ก้อน)\n"
-            f"   58 ก้อนเคยพัง 3 ครั้งติด (endpoint ค้าง 1 + ภาพเพี้ยน 2)\n"
-            f"   ถ้าภาพออกมาเพี้ยน ให้ลด --frames ลง แล้วชดเชยด้วยการลด --play-fps"
+            f"⚠️  {chunks} ก้อน เกินขนาดที่เชื่อถือได้ ({bake.SAFE_CHUNKS} ก้อน)\n"
+            f"   ยิ่งใหญ่ยิ่งเสี่ยง endpoint ค้างหรือภาพเพี้ยน (47 ก้อนพังไป 1 ใน 2 ครั้ง)\n"
+            f"   ลด --frames ลงแล้วลด --play-fps ตามส่วน จะได้ลูปยาวเท่าเดิมด้วยข้อมูลน้อยลง"
         )
 
     if args.preview:

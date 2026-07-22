@@ -11,9 +11,14 @@ class RainbowScene(Scene):
     name = "rainbow"
     description = "ไล่สีรุ้งไหลทั้งจอ"
     fps = 20.0
+    # phase เลื่อนไป 1.0 = สีวนกลับมาที่เดิมพอดี ลูปจึงยาว 1/speed วินาที
+    # ต้องประกาศระดับคลาสด้วย เพราะตัวคำนวณจำนวนเฟรมอ่านค่าก่อนสร้าง instance
+    DEFAULT_SPEED = 0.35
+    loop_seconds = 1.0 / DEFAULT_SPEED
 
-    def __init__(self, speed: float = 0.35) -> None:
+    def __init__(self, speed: float = DEFAULT_SPEED) -> None:
         self.speed = speed
+        self.loop_seconds = 1.0 / speed
         # ตาราง hsv→rgb แพงพอตัวเมื่อคูณ 315 พิกเซล × ทุกเฟรม จึงคิดล่วงหน้าไว้รอบเดียว
         self._wheel = [
             tuple(int(c * 254) for c in colorsys.hsv_to_rgb(i / 256.0, 1.0, 1.0))
