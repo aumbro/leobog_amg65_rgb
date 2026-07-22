@@ -1,56 +1,125 @@
 # AMG65 RGB Controller
 
-โปรแกรม Python สำหรับควบคุมไฟหลักของ **LEOBOG AMG65** ผ่าน USB HID Output Report
-`MI_02 / Usage Page 0xFF68` บน Windows
-โปรโตคอลได้รับการตรวจจากแพ็กเก็ตของ `DeviceDriver.exe` รุ่น 1.0.3.2 โดยตรง
-โดยไม่แฟลชหรือแก้เฟิร์มแวร์
+ควบคุมไฟและจอ LED ของคีย์บอร์ด **LEOBOG AMG65** ผ่าน USB HID บน Windows
+โปรโตคอลถอดจากแพ็กเก็ตของ `DeviceDriver.exe` 1.0.3.2 โดยตรง **ไม่แฟลชและไม่แก้เฟิร์มแวร์**
+
+ทำอะไรได้:
+
+- เอฟเฟกต์ไฟใต้ปุ่ม 20 โหมดของเฟิร์มแวร์ + กำหนดสีรายปุ่มเอง
+- ยิงภาพขึ้นจอ LED 63×5 แบบสด — นาฬิกา, spectrum ตามเสียง, ชื่อเพลง, มอนิเตอร์เครื่อง, เกม
+- พัฒนา scene ใหม่โดยดูผลในเทอร์มินัลได้ ไม่ต้องต่อคีย์บอร์ด
 
 ## ติดตั้ง
-
-ต่อคีย์บอร์ดด้วยสาย USB แล้วเปิด PowerShell ในโฟลเดอร์นี้:
 
 ```powershell
 py -m pip install -r requirements.txt
 ```
 
-ถ้าโปรแกรมทางการ LEOBOG เปิดอยู่แล้วเกิดข้อผิดพลาด ให้ปิดโปรแกรมนั้นจาก System Tray ก่อน
+ต่อคีย์บอร์ดด้วย **สาย USB** และสลับสวิตช์มาโหมดมีสาย (BT/2.4G ไม่เปิด vendor interface ที่ใช้)
+ถ้าโปรแกรม LEOBOG ทางการเปิดอยู่ ให้ปิดจาก system tray ก่อน — ไม่งั้นแย่งโหมดไฟกัน
 
-## ตัวอย่าง
+## เช็คว่าพร้อมใช้ไหม
 
-ไฟนิ่งสีแดง ความสว่างสูงสุด:
-
-```powershell
-py .\amg65_rgb.py static --rgb 255 0 0 --brightness 5
+```bash
+python -m amg65 doctor
 ```
 
-ไฟหายใจสีม่วง:
+อาการที่เจอบ่อยที่สุดคือ **MI_02 ค้าง** (เขียนแล้ว timeout 1 วินาที ขึ้น
+`Overlapped I/O operation is in progress`) มักเกิดตอน stream ถูกฆ่ากลางเฟรม
+แก้ด้วยการถอดสาย USB เสียบใหม่ แล้วรัน `doctor` ซ้ำ
 
-```powershell
-py .\amg65_rgb.py breath --rgb 180 0 255 --brightness 4 --speed 3
+## จอ LED
+
+```bash
+python -m amg65 list                 # ดู scene ทั้งหมด
+python -m amg65 show clock           # นาฬิกา + Space Invader
+python -m amg65 show vis             # spectrum ตามเสียงที่ลำโพงเล่นอยู่
+python -m amg65 show nowplaying      # ชื่อเพลงวิ่ง (ดึงจาก SMTC)
+python -m amg65 show sysmon          # CPU / RAM / เน็ต
+python -m amg65 show dino            # เกมไดโน — กด space กระโดด, r เริ่มใหม่
+python -m amg65 show pong            # ปิงปองเล่นเอง
+python -m amg65 show marquee --text "SAWATDEE"
 ```
 
-ไฟ Spectrum:
+ธงที่ใช้ร่วมกันได้:
 
-```powershell
-py .\amg65_rgb.py spectrum --colorful --brightness 5 --speed 3
+| ธง | ความหมาย |
+|---|---|
+| `--delay N` | หน่วงระหว่าง HID packet เป็น ms — **ตัวกำหนด FPS ตัวจริง** |
+| `--lean` | ตัด header/flush ต่อเฟรม (19 → 16 reports) |
+| `--fps N` | บังคับ FPS (ปกติ scene กำหนดเอง) |
+| `--preview` | วาดลงเทอร์มินัลด้วย |
+| `--no-device` | ไม่ต้องต่อคีย์บอร์ด — preview อย่างเดียว |
+| `--seconds N` | เล่นกี่วินาทีแล้วออก |
+
+ออกจากโปรแกรมด้วย `Ctrl+C` หรือกด `q`
+
+### เรื่อง FPS
+
+จาก `bench_fps.py` บนเครื่องจริง: **คอขวดคือ `--delay` ไม่ใช่จำนวน packet**
+
+| ปรับอะไร | ผล |
+|---|---|
+| ตัด packet 19 → 16 reports (`--lean`) | +12% |
+| ลด `--delay` 8.5 → 0 | 5.3 → 55.7 FPS |
+
+ไม่มีเฟรมหลุดเลยแม้ที่ delay 0 แต่ *throughput ผ่านไม่ได้แปลว่าภาพไม่กระพริบ* —
+การกระพริบเกิดฝั่งเฟิร์มแวร์ที่เอาเฟรมซึ่งยังมาไม่ครบไปแสดง โปรแกรมจับไม่ได้ ต้องดูด้วยตา:
+
+```bash
+python bench_fps.py --visual
 ```
 
-ปิดไฟ:
+หมายเหตุ: `time.sleep(1ms)` บน Windows จริง ๆ กินราว 2.8ms เพราะ timer resolution หยาบ
+ค่า delay ต่ำ ๆ จึงไม่ได้ผลเป็นเส้นตรงตามที่ตั้ง
 
-```powershell
-py .\amg65_rgb.py off
+## ไฟใต้ปุ่ม
+
+```bash
+python -m amg65 light static --rgb 255 0 0 --brightness 5
+python -m amg65 light breath --rgb 180 0 255 --brightness 4 --speed 3
+python -m amg65 light spectrum --colorful --brightness 5 --speed 3
+python -m amg65 light off
+python -m amg65 keys --key w 255 0 0 --key a 0 255 0 --key s 0 0 255 --hold
+python -m amg65 keys --random
 ```
 
-กำหนดไฟรายปุ่ม (ปุ่มที่ไม่ได้ระบุจะดับ):
+ชื่อปุ่มที่รองรับดูจาก `KEY_INDEX` ใน `amg65/keyboard.py`
 
-```powershell
-py .\amg65_rgb.py per-key --key w 255 0 0 --key a 0 255 0 --key s 0 0 255 --key d 255 255 0 --brightness 5
+⚠️ ไฟรายปุ่ม (`keys`) เป็น live preview — เฟิร์มแวร์ดับไฟเองเมื่อข้อมูลหยุดส่ง
+ต้องใช้ `--hold` ถ้าอยากให้ค้าง
+
+คำสั่งรูปแบบเดิม (`python amg65_rgb.py static --rgb 255 0 0`) ยังใช้ได้ โปรแกรมแปลงให้อัตโนมัติ
+
+## เขียน scene เอง
+
+scene มีหน้าที่เดียวคือวาดลง canvas — ห้ามยุ่งกับ HID และห้าม sleep เอง
+(engine เป็นคนคุมอุปกรณ์กับจังหวะ) ข้อบังคับนี้ทำให้ทุก scene รันบน preview ได้
+
+```python
+from amg65.matrix import Canvas
+from amg65.scenes.base import Scene
+
+class HelloScene(Scene):
+    name = "hello"
+    fps = 20.0
+
+    def render(self, canvas: Canvas, elapsed: float, frame: int) -> None:
+        canvas.text("HI", 0, (254, 0, 0))
 ```
 
-ดู packet โดยไม่ส่งจริง:
+ลงทะเบียนใน `amg65/scenes/__init__.py` แล้วเรียกด้วย `python -m amg65 show hello --no-device`
 
-```powershell
-py .\amg65_rgb.py static --rgb 0 255 255 --dry-run
-```
+## โครงไฟล์
 
-ชื่อปุ่มที่รองรับดูได้จากตัวแปร `KEY_INDEX` ใน `amg65_rgb.py`
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `amg65/device.py` | หา HID endpoint + ส่ง report แบบ retry/reopen เอง |
+| `amg65/matrix.py` | Canvas 63×5 + โปรโตคอลส่งเฟรม (จัด raw order ให้ตอนส่ง) |
+| `amg65/keyboard.py` | ไฟใต้ปุ่ม + `KEY_INDEX` / `LIGHT_ORDER` |
+| `amg65/font.py` | ฟอนต์ 5 แถว ความกว้างไม่คงที่ |
+| `amg65/engine.py` | วนเฟรม สลับ scene รับปุ่ม |
+| `amg65/preview.py` | วาด canvas ลงเทอร์มินัล |
+| `amg65/scenes/` | scene ทั้งหมด |
+| `bench_fps.py` | วัดเพดาน FPS |
+| `AMG65_REVERSE_ENGINEERING.md` | รายงานถอดโปรโตคอลฉบับเต็ม |
