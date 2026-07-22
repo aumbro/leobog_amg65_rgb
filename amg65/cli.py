@@ -63,6 +63,19 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         print("  ไม่เจอเลย — ต่อสาย USB และสลับสวิตช์มาโหมดมีสาย")
         return 1
 
+    # การทดสอบเขียนของ doctor ก็คือการเขียนเข้า endpoint จริง ถ้ามีโปรแกรมอื่น
+    # กำลังสตรีมอยู่ ก็จะกลายเป็นสองโปรเซสเขียนพร้อมกัน = สาเหตุที่ทำให้ค้าง
+    # จึงตรวจได้แค่ระดับ enumerate เท่านั้นในกรณีนั้น
+    try:
+        claim_exclusive()
+    except AlreadyRunning:
+        print(
+            "\nมีโปรแกรม amg65 อีกตัวถืออุปกรณ์อยู่ — ข้ามการทดสอบเขียน"
+            "\n  (เขียนซ้อนกันคือสาเหตุที่ทำให้ endpoint ค้าง)"
+            "\n  ปิดตัวนั้นก่อนถ้าอยากตรวจเต็มรูปแบบ"
+        )
+        return 0
+
     ok = True
     for channel, label in (("control", "MI_02 คุมไฟ/stream"), ("bulk", "MI_03 อัปโหลด")):
         try:
