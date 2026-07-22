@@ -44,6 +44,20 @@ class DeviceNotFound(RuntimeError):
     pass
 
 
+class EndpointStalled(OSError):
+    """interrupt OUT ของ MI_02 ค้าง — เปิด handle ใหม่ก็ไม่หาย ต้องถอดสายเสียบใหม่
+
+    อาการ: hid_write บล็อกจนครบ timeout ~1 วินาทีแล้วคืน -1 ทุกครั้ง พร้อม
+    "Overlapped I/O operation is in progress" ขณะที่ MI_03 ยังเขียนได้ปกติ
+
+    เกิดจากส่งเร็วกว่าที่อุปกรณ์ระบายทัน จน transfer ค้างคาไม่มีวันจบ
+    """
+
+
+# write ที่พลาดแบบ "บล็อกจนครบ timeout" คือ endpoint ค้าง ไม่ใช่แค่ยุ่งชั่วคราว
+STALL_SECONDS = 0.9
+
+
 def find_path(channel: str = "control") -> bytes:
     """คืน HID path ของช่องที่ต้องการ ('control' = MI_02, 'bulk' = MI_03)."""
     interface = CONTROL_INTERFACE if channel == "control" else BULK_INTERFACE
@@ -118,6 +132,7 @@ class Link:
         for attempt in range(retries):
             if self.dev is None:
                 self.reopen()
+            started = time.perf_counter()
             try:
                 assert self.dev is not None
                 written = self.dev.write(bytes(report))
@@ -125,12 +140,16 @@ class Link:
                 written = -1
             if written == self.report_bytes:
                 return
+            # write ที่บล็อกจนครบ timeout = endpoint ค้าง; retry/reopen ไม่ช่วย
+            # (พิสูจน์แล้วว่าเปิด handle ใหม่ก็ยังค้าง) มีแต่เสีย 1 วินาทีต่อครั้ง
+            if time.perf_counter() - started >= STALL_SECONDS:
+                raise EndpointStalled(
+                    f"endpoint {self.channel} (MI_0{CONTROL_INTERFACE if self.channel == 'control' else BULK_INTERFACE}) ค้าง\n"
+                    "  เกิดจากส่งถี่เกินกว่าที่อุปกรณ์ระบายทัน — เพิ่มค่า --delay\n"
+                    "  แก้ตอนนี้: ถอดสาย USB เสียบใหม่ แล้วรัน `python -m amg65 doctor`"
+                )
             if attempt < retries - 1:
-                # ครั้งแรกแค่พัก; ครั้งต่อไปถือว่า endpoint ค้าง ต้องเปิดใหม่
-                if attempt == 0:
-                    time.sleep(0.020)
-                else:
-                    self.reopen()
+                time.sleep(0.020)
         raise OSError(
             f"ส่ง report ไม่สำเร็จ ({written}/{self.report_bytes} ไบต์) ที่ช่อง {self.channel}"
         )

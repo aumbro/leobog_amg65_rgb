@@ -6,7 +6,7 @@ import sys
 import time
 
 from . import scenes
-from .device import CONTROL_REPORT_BYTES, DeviceNotFound, Link, find_path
+from .device import CONTROL_REPORT_BYTES, DeviceNotFound, EndpointStalled, Link, find_path
 from .engine import Engine, MatrixSink, MultiSink, PreviewSink
 from .keyboard import KEY_INDEX, MODES, KeyboardLight
 from .matrix import Matrix
@@ -118,17 +118,21 @@ def cmd_show(args: argparse.Namespace) -> int:
 
     sink = sinks[0] if len(sinks) == 1 else MultiSink(*sinks)
     engine = Engine(sink, fps=args.fps)
+    stalled = False
     try:
         engine.run(scene, duration=args.seconds)
     except KeyboardInterrupt:
         pass
+    except EndpointStalled as exc:
+        stalled = True
+        print(f"\nหยุดเพราะ endpoint ค้าง:\n{exc}")
     finally:
         sink.close()
         if link is not None:
             link.close()
     dropped = getattr(sink, "drops", 0)
     print(f"\nจบ — FPS จริงล่าสุด {engine.actual_fps:.1f}" + (f", เฟรมหลุด {dropped}" if dropped else ""))
-    return 0
+    return 1 if stalled else 0
 
 
 def cmd_light(args: argparse.Namespace) -> int:

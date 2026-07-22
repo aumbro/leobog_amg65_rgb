@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 
+from .device import EndpointStalled
 from .matrix import Canvas, Matrix
 from .scenes.base import Scene
 
@@ -61,6 +62,9 @@ class MatrixSink:
     def show(self, canvas: Canvas) -> None:
         try:
             self.matrix.show(canvas)
+        except EndpointStalled:
+            # ค้างแล้วไม่มีทางกลับมาเองจนกว่าจะถอดสาย — วนต่อมีแต่ค้างทีละ 1 วินาที
+            raise
         except OSError:
             # เฟรมเดียวหายดีกว่าโปรแกรมตาย — เฟรมถัดไปจะเข้าโหมด stream ใหม่เอง
             self.drops += 1
