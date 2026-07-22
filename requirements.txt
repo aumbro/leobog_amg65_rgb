@@ -1,1 +1,7 @@
 hidapi==0.15.0
+
+# scene ที่ต้องใช้ของเพิ่ม — ไม่ลงก็ใช้ scene อื่นได้ (ทะเบียน scene import แบบขี้เกียจ)
+psutil      # sysmon
+numpy       # vis
+soundcard   # vis — WASAPI loopback (Windows เท่านั้น)
+winsdk      # nowplaying — SMTC ของ Windows
