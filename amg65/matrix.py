@@ -227,15 +227,26 @@ class Matrix:
 
     # ---------- อัปโหลดเป็นชุด (MI_03) ----------
 
-    def upload_animation(self, bulk: Link, frames: list[Canvas]) -> None:
+    def upload_animation(
+        self,
+        bulk: Link,
+        frames: list[Canvas],
+        speed: int = 0x0C,
+        on_progress=None,
+    ) -> None:
         """เก็บภาพ/แอนิเมชันลงเครื่องผ่าน MI_03 — เล่นต่อได้เองแม้ปิดโปรแกรม
 
-        ต่างจาก live stream ตรงที่ไม่ต้องมี process ค้างไว้ แต่ report ใหญ่ 4097 ไบต์
-        และต้องหน่วง ~170ms ต่อก้อน จึงใช้กับภาพนิ่ง/ลูปสั้นเท่านั้น
+        นี่คือทางเดียวที่ได้ภาพลื่นบนจอนี้ เพราะ live stream ตันที่ ~5-6 FPS
+        ระหว่างเล่นไม่มีทราฟฟิก USB เลย จึงไม่มีโอกาสที่ endpoint จะค้าง
+
+        `speed` คือไบต์ที่ 2 ของ header ซึ่งโปรแกรมทางการใส่ 0x0C มาตลอด
+        ยังไม่ยืนยันว่าคืออะไร — เดาว่าเป็นค่าหน่วงต่อเฟรม เปิดให้ลองค่าอื่นได้
         """
         if not 1 <= len(frames) <= 255:
             raise ValueError("animation ต้องมี 1–255 เฟรม")
-        payload = bytearray((len(frames), 0, 0x0C, 0))
+        if not 0 <= speed <= 255:
+            raise ValueError("speed ต้องอยู่ระหว่าง 0-255")
+        payload = bytearray((len(frames), 0, speed, 0))
         for canvas in frames:
             for x, y in RAW_ORDER:
                 r, g, b = canvas.pixels[y * WIDTH + x]
@@ -248,8 +259,12 @@ class Matrix:
         init[8] = (len(payload) + 4095) // 4096
         self.link.send(self._begin_payload())
         self.link.send(init)
-        for offset in range(0, len(payload), 4096):
+        chunks = (len(payload) + 4095) // 4096
+        for index, offset in enumerate(range(0, len(payload), 4096)):
             bulk.send(payload[offset : offset + 4096])
+            if on_progress is not None:
+                on_progress(index + 1, chunks)
+            # report ใหญ่ต้องมีเวลาระบายผ่าน endpoint; โปรแกรมทางการเว้น ~160-167ms
             time.sleep(0.170)
         self.link.send(CMD_APPLY)
         self.link.send(CMD_FINALIZE)

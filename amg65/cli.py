@@ -137,6 +137,74 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 1 if stalled else 0
 
 
+def cmd_upload(args: argparse.Namespace) -> int:
+    """เบคเฟรมแล้วเก็บลงเครื่อง — เล่นวนเองโดยไม่ต้องมีโปรแกรมค้าง"""
+    from . import bake
+
+    if bool(args.source) == bool(args.scene):
+        print("ต้องระบุอย่างใดอย่างหนึ่ง: ไฟล์ภาพ/GIF หรือ --scene")
+        return 2
+
+    try:
+        if args.scene:
+            kwargs = {"text": args.text} if args.scene == "marquee" and args.text else {}
+            frames = bake.frames_from_scene(
+                args.scene, args.frames or 60, args.render_fps, args.brightness, **kwargs
+            )
+        else:
+            # ไฟล์ภาพมีจำนวนเฟรมของมันเองอยู่แล้ว ไม่ระบุ = เอาทั้งหมดเท่าที่โควตาไหว
+            # (ถ้า default เป็น 60 GIF 83 เฟรมจะโดนสุ่มทิ้งไปเงียบ ๆ)
+            frames = bake.frames_from_image(
+                args.source, args.fit, args.brightness, args.frames or bake.MAX_FRAMES
+            )
+    except (KeyError, ImportError, ValueError, OSError) as exc:
+        print(f"เบคเฟรมไม่สำเร็จ: {exc}")
+        return 2
+
+    size = bake.payload_size(len(frames))
+    chunks = (size + 4095) // 4096
+    print(
+        f"ได้ {len(frames)} เฟรม, payload {size:,} ไบต์ = {chunks} ก้อน"
+        f" (อัปโหลดราว {chunks * 0.17:.1f} วินาที)"
+    )
+
+    if args.preview:
+        from . import preview
+
+        preview.enable_ansi()
+        preview.clear_screen()
+        try:
+            for loop in range(args.preview_loops):
+                for index, canvas in enumerate(frames):
+                    preview.draw(canvas, f"เฟรม {index + 1}/{len(frames)} (รอบ {loop + 1})")
+                    time.sleep(1.0 / max(args.render_fps or 15.0, 1.0))
+        except KeyboardInterrupt:
+            pass
+        if args.no_upload:
+            return 0
+
+    if args.no_upload:
+        print("--no-upload: ไม่ส่งเข้าเครื่อง")
+        return 0
+
+    try:
+        with Link("control") as control, Link("bulk") as bulk:
+            matrix = Matrix(control)
+            print("กำลังอัปโหลด ...")
+            matrix.upload_animation(
+                bulk, frames, speed=args.speed,
+                on_progress=lambda done, total: print(f"  {done}/{total}", end="\r", flush=True),
+            )
+        print("\nอัปโหลดเสร็จ — เฟิร์มแวร์เล่นวนเองแล้ว ปิดโปรแกรมได้เลย")
+    except EndpointStalled as exc:
+        print(f"\n{exc}")
+        return 1
+    except (OSError, DeviceNotFound) as exc:
+        print(f"\nอัปโหลดไม่สำเร็จ: {exc}")
+        return 1
+    return 0
+
+
 def cmd_light(args: argparse.Namespace) -> int:
     with Link("control", dry_run=args.dry_run) as link:
         KeyboardLight(link).set_effect(
@@ -199,6 +267,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
+
+    p_upload = sub.add_parser(
+        "upload", help="เบคเฟรมเก็บลงเครื่อง แล้วเฟิร์มแวร์เล่นวนเอง (ลื่นกว่า stream)"
+    )
+    p_upload.add_argument("source", nargs="?", help="ไฟล์ภาพหรือ GIF")
+    p_upload.add_argument("--scene", choices=tuple(scenes.REGISTRY), help="เบคจาก scene แทนไฟล์")
+    p_upload.add_argument(
+        "--frames", type=int, default=None,
+        help="จำนวนเฟรม สูงสุด 255 (ไม่ระบุ: scene = 60, ไฟล์ = เท่าที่ไฟล์มี)",
+    )
+    p_upload.add_argument("--render-fps", type=float, default=None, help="FPS ที่ใช้ตอนเรนเดอร์ scene")
+    p_upload.add_argument("--brightness", type=float, default=1.0, help="ตัวคูณความสว่าง 0-1")
+    p_upload.add_argument(
+        "--fit", choices=("cover", "fit", "stretch"), default="cover",
+        help="วิธีย่อภาพลงจอ 63x5 (จออัตราส่วน 12.6:1)",
+    )
+    p_upload.add_argument("--text", help="ข้อความ ถ้าเบชจาก scene marquee")
+    p_upload.add_argument(
+        "--speed", type=lambda s: int(s, 0), default=0x0C,
+        help="ไบต์ที่ 2 ของ header ที่ยังไม่รู้ความหมาย (ทางการใช้ 0x0C)",
+    )
+    p_upload.add_argument("--preview", action="store_true", help="ดูเฟรมในเทอร์มินัลก่อน")
+    p_upload.add_argument("--preview-loops", type=int, default=2, help="วนดูกี่รอบ")
+    p_upload.add_argument("--no-upload", action="store_true", help="ไม่ต้องส่งเข้าเครื่อง")
+    p_upload.set_defaults(func=cmd_upload)
 
     p_light = sub.add_parser("light", help="เอฟเฟกต์ไฟใต้ปุ่มของเฟิร์มแวร์")
     p_light.add_argument("effect", choices=tuple(MODES))
