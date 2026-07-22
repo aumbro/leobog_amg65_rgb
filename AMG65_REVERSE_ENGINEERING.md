@@ -1,0 +1,427 @@
+# สรุปการ Reverse Engineer และควบคุมไฟ LEOBOG AMG65
+
+วันที่ทดสอบ: 21 กรกฎาคม 2026  
+ระบบที่ใช้ทดสอบ: Windows, เชื่อมต่อคีย์บอร์ดด้วยสาย USB  
+โปรแกรมหลัก: `amg65-rgb/amg65_rgb.py`
+
+## 1. ผลลัพธ์ที่ทำได้
+
+โปรแกรมสามารถควบคุมระบบไฟของ AMG65 ได้โดยตรงผ่าน USB HID โดยไม่ต้องแฟลชหรือแก้เฟิร์มแวร์ ได้แก่
+
+- เปลี่ยนเอฟเฟกต์ RGB ของคีย์บอร์ด
+- กำหนดสีแบบรายปุ่ม
+- สุ่มสีรายปุ่มต่อเนื่อง
+- ปิดไฟคีย์บอร์ดทั้งหมด
+- ส่งภาพหรือแอนิเมชันไปยัง LED Matrix 63×5
+- สตรีม LED Matrix แบบต่อเนื่องด้วย protocol ของโหมด Music
+- แสดงนาฬิกา `HH:MM:SS` บนพื้นที่หลัก 56×5
+- แสดง Space Invader แบบเคลื่อนไหวบน Matrix ด้านขวา 7×5
+- กู้คืนสตรีมอัตโนมัติเมื่อ Windows ปฏิเสธ HID packet ชั่วคราว
+
+สิ่งสำคัญที่สุดที่ค้นพบคือ ลำดับ pixel ในหน่วยความจำของอุปกรณ์ไม่ได้เรียงซ้ายไปขวาตลอด Matrix แต่แบ่งเป็นสี่บล็อก 14×5 แล้วจึงตามด้วยบล็อกขวา 7×5
+
+## 2. โครงสร้าง USB HID
+
+ค่าระบุอุปกรณ์:
+
+| รายการ | ค่า |
+|---|---:|
+| Vendor ID | `0x0C45` |
+| Product ID | `0x800A` |
+
+อินเทอร์เฟซที่ใช้:
+
+| หน้าที่ | Interface | Usage Page | ขนาด report บน Windows |
+|---|---:|---:|---:|
+| คำสั่งไฟและ Matrix streaming | `MI_02` | `0xFF68` | 65 bytes |
+| อัปโหลด Matrix animation ขนาดใหญ่ | `MI_03` | `0xFF67` | 4097 bytes |
+
+ไบต์แรกของ report บน Windows เป็น Report ID และมีค่า `0x00` เสมอ ดังนั้น payload 64 bytes จะถูกวางตั้งแต่ report byte ที่ 1 เป็นต้นไป
+
+คีย์บอร์ดสำหรับการพิมพ์และช่องควบคุมไฟเป็นคนละ HID interface การสตรีม Matrix จึงไม่ได้นำข้อมูลตัวอักษรไปปนกับข้อมูลไฟโดยตรง
+
+## 3. Protocol ไฟคีย์บอร์ดทั่วไป
+
+ลำดับคำสั่งหลักที่ตรวจจาก `DeviceDriver.exe` รุ่น 1.0.3.2:
+
+1. `04 18` — เริ่ม transaction
+2. `04 13` — เตรียมข้อมูลเอฟเฟกต์ โดยกำหนด byte 8 เป็น `01`
+3. ส่งข้อมูลเอฟเฟกต์ 64 bytes
+4. `04 02` — Apply
+5. `04 F0` — Finalize
+
+ข้อมูลเอฟเฟกต์ประกอบด้วย:
+
+| Offset ใน payload | ความหมาย |
+|---:|---|
+| 0 | หมายเลขโหมด |
+| 1–3 | Red, Green, Blue |
+| 8 | ใช้สีแบบ Colorful หรือไม่ |
+| 9 | Brightness ระดับ 0–5 |
+| 10 | Speed ระดับ 0–5 |
+| 11 | Direction 0–3 |
+| 14–15 | Trailer `AA 55` |
+
+โหมดที่รองรับในโปรแกรม:
+
+| ชื่อคำสั่ง | หมายเลขโหมด |
+|---|---:|
+| `off` | 0 |
+| `static` | 1 |
+| `single-on` | 2 |
+| `single-off` | 3 |
+| `glittering` | 4 |
+| `falling` | 5 |
+| `colourful` | 6 |
+| `breath` | 7 |
+| `spectrum` | 8 |
+| `outward` | 9 |
+| `scrolling` | 10 |
+| `rolling` | 11 |
+| `rotating` | 12 |
+| `explode` | 13 |
+| `launch` | 14 |
+| `ripples` | 15 |
+| `flowing` | 16 |
+| `pulsating` | 17 |
+| `tilt` | 18 |
+| `shuttle` | 19 |
+
+## 4. Protocol ไฟรายปุ่ม
+
+ไฟรายปุ่มใช้ transaction แบบ live preview:
+
+1. ส่ง `04 20`
+2. กำหนด byte 8 เป็น `08`
+3. ส่งตารางสีรวม 512 bytes แบ่งเป็น 8 reports × 64 bytes
+
+แต่ละรายการใช้ 4 bytes:
+
+```text
+[light_index, red, green, blue]
+```
+
+ตำแหน่งในตารางไม่ใช่ `light_index × 4` แต่ต้องเรียงตามลำดับ `LIGHT_ORDER` ที่ถอดจากโปรแกรมทางการ ปุ่มที่ไม่ระบุสีจะถูกกำหนดเป็น `(0, 0, 0)`
+
+Custom Light เป็นข้อมูลแบบ live preview เฟิร์มแวร์อาจดับไฟเมื่อหยุดส่ง โปรแกรมจึงมี `--hold` และโหมด `random` ซึ่งส่งข้อมูลซ้ำต่อเนื่อง
+
+## 5. โครงสร้าง LED Matrix
+
+จำนวน pixel รวม:
+
+```text
+63 columns × 5 rows = 315 RGB pixels
+```
+
+พื้นที่ทางกายภาพแบ่งเป็น:
+
+```text
+Main panel:   56 × 5 = 280 pixels
+Right panel:   7 × 5 =  35 pixels
+Total:        63 × 5 = 315 pixels
+```
+
+### Mapping ที่ถูกต้อง
+
+ลำดับ raw ของอุปกรณ์คือ:
+
+```text
+raw   0– 69  = บล็อกหลักที่ 1 ขนาด 14×5 แบบ row-major
+raw  70–139  = บล็อกหลักที่ 2 ขนาด 14×5 แบบ row-major
+raw 140–209  = บล็อกหลักที่ 3 ขนาด 14×5 แบบ row-major
+raw 210–279  = บล็อกหลักที่ 4 ขนาด 14×5 แบบ row-major
+raw 280–314  = บล็อกขวาขนาด 7×5 แบบ row-major
+```
+
+สูตรแปลง raw index เป็นพิกัด `(x, y)`:
+
+```python
+if raw_index < 280:
+    block = raw_index // 70
+    inside = raw_index % 70
+    x = block * 14 + inside % 14
+    y = inside // 14
+else:
+    inside = raw_index - 280
+    x = 56 + inside % 7
+    y = inside // 7
+```
+
+ตารางย่อ:
+
+| ช่วง raw | ช่วง X | Y | รูปแบบ |
+|---:|---:|---:|---|
+| 0–69 | 0–13 | 0–4 | 14 pixels ต่อแถว |
+| 70–139 | 14–27 | 0–4 | 14 pixels ต่อแถว |
+| 140–209 | 28–41 | 0–4 | 14 pixels ต่อแถว |
+| 210–279 | 42–55 | 0–4 | 14 pixels ต่อแถว |
+| 280–314 | 56–62 | 0–4 | 7 pixels ต่อแถว |
+
+นี่คือเหตุผลที่การส่งไฟไล่ raw index ดูเหมือนจุดกระโดด: เมื่อครบ 14 จุด จุดถัดไปจะกลับไปต้นบล็อกแล้วเลื่อนลงหนึ่งแถว ไม่ได้วิ่งต่อไปตลอดความกว้าง 63 จุด
+
+## 6. วิธีหา Mapping จากวิดีโอ
+
+ใช้วิดีโอ `WIN_20260721_20_56_47_Pro.mp4` ซึ่งมีข้อมูลประมาณ:
+
+- ความละเอียด 1280×720
+- 29.97 FPS
+- 1,991 frames
+- ความยาวประมาณ 66.43 วินาที
+
+โปรแกรม calibration ส่งไฟทีละ raw pixel ที่ประมาณ 5 FPS และวนครบ 315 จุด โดยใช้สี marker:
+
+```text
+raw_index หาร 35 ลงตัว = เขียว
+raw_index หาร 7 ลงตัว  = น้ำเงิน
+ตำแหน่งอื่น              = แดง
+```
+
+ขั้นตอนวิเคราะห์:
+
+1. Crop เฉพาะบริเวณ Matrix จากแต่ละ video frame
+2. แปลงภาพเป็น HSV
+3. Threshold pixel ที่มี saturation และ brightness สูง
+4. ใช้ connected components หา centroid ของจุดที่ติด
+5. รวม frame ต่อเนื่องที่เป็นจุดเดียวกันเป็นหนึ่ง run
+6. ใช้ marker สีน้ำเงินทุก 7 จุดและสีเขียวทุก 35 จุดตรวจลำดับเวลา
+7. เปรียบเทียบ centroid ของแต่ละ raw index กับแถวและคอลัมน์จริง
+
+ตรวจจับได้ 329 runs จากวิดีโอซึ่งครอบคลุมรอบเต็ม 315 จุดและจุดต้นรอบถัดไป ผลที่เห็นชัดคือกลุ่ม raw 70 จุดจะสร้างพื้นที่ 14×5 หนึ่งบล็อก จนครบสี่บล็อก แล้ว 35 จุดสุดท้ายสร้างพื้นที่ 7×5 ด้านขวา
+
+ก่อนวิเคราะห์วิดีโอเคยทดลอง mapping แบบ 8×5 หลายบล็อก ทำให้นาฬิกาและตัวอักษรบิดเบี้ยว Mapping ดังกล่าวถูกยกเลิกแล้ว
+
+## 7. Protocol อัปโหลด Matrix Animation
+
+การอัปโหลดภาพหรือแอนิเมชันแบบเก็บเป็นชุดใช้ทั้งสองอินเทอร์เฟซ:
+
+1. ส่ง `04 18` ทาง `MI_02`
+2. ส่ง `04 33` ทาง `MI_02`
+3. ใส่จำนวน chunk ที่ byte 8
+4. ส่งข้อมูลผ่าน report ขนาด 4097 bytes ทาง `MI_03`
+5. หน่วงแต่ละ large report ประมาณ 170 ms
+6. ส่ง `04 02`
+7. ส่ง `04 F0`
+
+โครงสร้าง animation payload:
+
+```text
+[frame_count, 00, 0C, 00]
+[RGB ของทุก pixel ของทุก frame]
+[AA, 55]
+```
+
+กรณีภาพเดียว โปรแกรมทางการมี padding `00` ก่อน `AA 55`
+
+วิธีนี้เหมาะกับภาพหรือ animation ที่อัปโหลดเป็นชุด แต่ไม่เหมาะกับภาพสดที่ต้องเปลี่ยนตลอดเวลา เพราะ report ใหญ่และมี delay สูง
+
+## 8. Protocol Matrix Streaming แบบ Music
+
+การสตรีมสดใช้เฉพาะ report ขนาด 65 bytes ทาง `MI_02` ลำดับต่อหนึ่ง frame คือ:
+
+1. `04 18`
+2. รอ 8.5 ms
+3. `04 35` โดย byte 8 = `0F`
+4. รอ 8.5 ms
+5. ส่ง RGB payload 15 reports × 64 bytes
+6. รอ 8.5 ms ระหว่าง reports
+7. ส่ง zero flush report 64 bytes อีกหนึ่ง report
+8. รอ 8.5 ms
+9. ส่ง `04 02`
+
+ข้อมูลภาพต่อ frame:
+
+```text
+315 pixels × 3 bytes = 945 bytes
+Trailer AA 55        =   2 bytes
+Padding              =  13 bytes
+รวม                   = 960 bytes = 15 × 64
+```
+
+ค่าช่องสีถูกจำกัดสูงสุดไว้ที่ `0xFE` หรือ 254 เพราะ protocol ของโปรแกรมทางการไม่ใช้ `0xFF` ใน live stream
+
+จำนวน HID reports ต่อ frame:
+
+```text
+Begin 1 + Init 1 + RGB 15 + Flush 1 + Apply 1 = 19 reports
+```
+
+## 9. FPS และแบนด์วิดท์
+
+จากการทดลอง:
+
+| ค่า | ผลที่เห็น |
+|---:|---|
+| 10 FPS / delay สั้นประมาณ 4 ms | มีอาการกระพริบ |
+| เป้าหมาย 8 FPS / delay ประมาณ 7 ms | ทำงานได้ช่วงหนึ่ง แต่พบกระพริบภายหลัง |
+| เป้าหมาย 7 FPS / delay 8.5 ms | เสถียรกว่าและใช้เป็นค่าปัจจุบัน |
+
+ถึงแม้กำหนด `--fps 7` เวลาส่งจริงต่อ frame ถูกจำกัดด้วย report 19 ชุดและ delay ระหว่าง packet จึงอาจได้ effective FPS ต่ำกว่า 7 เล็กน้อย
+
+แบนด์วิดท์โดยประมาณที่ 7 FPS:
+
+```text
+19 reports × 65 bytes × 7 ≈ 8,645 bytes/second
+```
+
+ปริมาณนี้ต่ำมากเมื่อเทียบกับแบนด์วิดท์ USB โดยรวม และข้อมูลการพิมพ์อยู่คนละ HID interface จึงไม่ควรกินแบนด์วิดท์จนทำให้คีย์หาย อย่างไรก็ตาม Windows HID endpoint อาจ busy ชั่วคราวและปฏิเสธ output report ได้ ซึ่งเป็นสาเหตุที่สตรีมรอบแรกหยุด
+
+## 10. การแก้อาการสตรีมหลุด
+
+อาการที่พบ:
+
+```text
+OSError: ส่งคำสั่ง Matrix ไม่ครบ 65 ไบต์
+```
+
+สาเหตุโดยตรงคือ `hid.write()` คืนค่าจำนวน bytes ไม่ครบ 65 หรือเกิด `OSError` โปรแกรมเดิมโยน exception แล้วปิด process ทำให้ภาพถูกต้องช่วงแรกก่อนจะหายไป
+
+การแก้ปัจจุบันมีสองระดับ:
+
+1. Retry report เดิมสูงสุด 3 ครั้ง โดยหน่วง 20 ms ระหว่างครั้ง
+2. ถ้ายังไม่สำเร็จ ให้ปิดและเปิด `MI_02` ใหม่ แล้วส่ง frame ทั้งชุดใหม่ตั้งแต่ `04 18`
+
+ถ้าถอดสาย โปรแกรมจะวนรอและพยายามเปิด endpoint ใหม่ทุก 250 ms เมื่อเสียบกลับจึงสามารถกลับมาส่งต่อได้ โดย Matrix live stream ใช้ `MI_02` เป็นหลัก
+
+## 11. นาฬิกาและ Space Invader
+
+โหมด `matrix-clock` แบ่งพื้นที่ดังนี้:
+
+```text
+X 0–55  : นาฬิกา HH:MM:SS บนพื้นที่ 56×5
+X 56–62 : Space Invader เคลื่อนไหวบนพื้นที่ขวา 7×5
+```
+
+ตัวเลขใช้ฟอนต์ pixel 3×5 ส่วนเครื่องหมาย `:` ใช้หนึ่งคอลัมน์และกระพริบสลับความสว่าง Space Invader มีหลายเฟรมและเปลี่ยนสีตามเวลา
+
+ก่อนส่งภาพ logical 63×5 โปรแกรมจะจัด pixel กลับเป็น raw order แบบ 14×5 × 4 + 7×5 ตาม mapping ที่ได้จากวิดีโอ
+
+## 12. การติดตั้ง
+
+เปิด PowerShell ที่โฟลเดอร์ `amg65-rgb` แล้วติดตั้ง dependency:
+
+```powershell
+python -m pip install -r .\requirements.txt
+```
+
+dependency ปัจจุบัน:
+
+```text
+hidapi==0.15.0
+```
+
+ถ้า `python` หลายรุ่นอยู่ในเครื่อง ให้ตรวจว่ารุ่นที่รันโปรแกรมเป็นรุ่นเดียวกับที่ติดตั้ง `hidapi`:
+
+```powershell
+python -c "import sys, hid; print(sys.executable); print(hid.__file__)"
+```
+
+## 13. คำสั่งใช้งาน
+
+### นาฬิกาและ Space Invader
+
+```powershell
+python .\amg65_rgb.py matrix-clock --fps 7
+```
+
+### Rainbow Matrix แบบ streaming
+
+```powershell
+python .\amg65_rgb.py matrix-stream --fps 7
+```
+
+### ไล่ raw pixel ทีละจุดเพื่อ calibration
+
+```powershell
+python .\amg65_rgb.py matrix-calibrate --fps 5
+```
+
+### แสดงหมายเลขประจำบล็อก Matrix
+
+```powershell
+python .\amg65_rgb.py matrix-map --fps 5
+```
+
+### ไฟคีย์บอร์ดสีแดงนิ่ง
+
+```powershell
+python .\amg65_rgb.py static --rgb 255 0 0 --brightness 5
+```
+
+### ไฟหายใจสีม่วง
+
+```powershell
+python .\amg65_rgb.py breath --rgb 180 0 255 --brightness 4 --speed 3
+```
+
+### Spectrum
+
+```powershell
+python .\amg65_rgb.py spectrum --colorful --brightness 5 --speed 3
+```
+
+### ปิดไฟคีย์บอร์ด
+
+```powershell
+python .\amg65_rgb.py off
+```
+
+### กำหนดสีรายปุ่ม
+
+```powershell
+python .\amg65_rgb.py per-key `
+  --key w 255 0 0 `
+  --key a 0 255 0 `
+  --key s 0 0 255 `
+  --key d 255 255 0 `
+  --brightness 5 `
+  --hold
+```
+
+### สุ่มสีรายปุ่มต่อเนื่อง
+
+```powershell
+python .\amg65_rgb.py random --brightness 5
+```
+
+### ตรวจ packet โดยไม่ส่งเข้าคีย์บอร์ด
+
+```powershell
+python .\amg65_rgb.py static --rgb 0 255 255 --dry-run
+```
+
+หยุดโปรแกรม foreground ด้วย `Ctrl+C` ถ้ารันแบบ background ให้ใช้ PID ที่ต้องการโดยตรง:
+
+```powershell
+Stop-Process -Id <PID>
+```
+
+## 14. ข้อควรระวังและข้อจำกัด
+
+- ต้องเชื่อมต่อด้วยสาย USB; Bluetooth หรือ 2.4 GHz อาจไม่เปิด vendor HID interface เดียวกัน
+- ควรปิดโปรแกรม LEOBOG ทางการ เพราะทั้งสองโปรแกรมอาจส่งข้อมูลไป endpoint เดียวกันและแย่งโหมดไฟกัน
+- หากเปลี่ยน USB port หรือ power cycle ควรตรวจ VID/PID และ interface อีกครั้ง
+- FPS สูงเกินไปทำให้กระพริบหรือเกิด HID write failure
+- `--fps` เป็นเป้าหมายระดับ animation แต่ความเร็วจริงถูกจำกัดด้วย packet delay ของ protocol
+- การสตรีม Matrix ทำให้ต้องมี process ทำงานค้างอยู่ เมื่อหยุด process ภาพ live อาจค้างชั่วคราวหรือกลับไปเอฟเฟกต์เดิมของเฟิร์มแวร์
+- Mapping นี้ยืนยันกับบอร์ด AMG65 เครื่องที่ทดสอบ หากมี hardware revision อื่นควรรัน dot calibration ตรวจอีกครั้ง
+
+## 15. ไฟล์สำคัญ
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `amg65-rgb/amg65_rgb.py` | โปรแกรมควบคุมทั้งหมด |
+| `amg65-rgb/requirements.txt` | Python dependency |
+| `amg65-rgb/README.md` | คู่มือเริ่มต้นแบบย่อ |
+| `AMG65_REVERSE_ENGINEERING.md` | รายงานฉบับละเอียดนี้ |
+
+## 16. สถานะล่าสุด
+
+- Mapping 63×5: ถูกต้อง
+- นาฬิกา 56×5: แสดงถูกต้อง
+- Space Invader 7×5: แสดงถูกต้อง
+- Matrix streaming: ทำงานได้
+- Packet delay ปัจจุบัน: 8.5 ms
+- เป้าหมาย animation: 7 FPS
+- Retry/reconnect อัตโนมัติ: เพิ่มแล้ว
+- ทดสอบหลังเพิ่ม recovery: process ทำงานต่อเนื่องและไม่จบจาก HID packet ที่พลาดครั้งเดียว
+
