@@ -56,6 +56,25 @@ python -m amg65 doctor
 `Overlapped I/O operation is in progress`) มักเกิดตอน stream ถูกฆ่ากลางเฟรม
 แก้ด้วยการถอดสาย USB เสียบใหม่ แล้วรัน `doctor` ซ้ำ
 
+## ทำเป็นแอป (.exe ดับเบิลคลิกเปิด)
+
+ไม่อยากพิมพ์คำสั่งทุกครั้ง แพ็กเป็นแอป Windows ที่เปิด tray ให้เลย:
+
+```powershell
+pip install pyinstaller
+.\build_app.bat
+```
+
+ได้ `dist\amg65\amg65.exe` — ดับเบิลคลิกเปิด ไอคอนขึ้นถาดระบบ คลิกขวาสลับ scene
+แจกทั้งโฟลเดอร์ `dist\amg65\` ได้เลย (ไม่ต้องมี Python บนเครื่องปลายทาง)
+
+ปิดแอปจากเมนู "ออก" ของไอคอน หรือสั่ง `python -m amg65 stop` จากที่ไหนก็ได้
+(ถ้าลง exe ไว้จะสั่งจาก exe ก็ได้: `amg65.exe` ไม่มี subcommand = เปิด tray;
+คำสั่งอื่นยังต้องใช้ `python -m amg65`)
+
+อยากให้เปิดเองตอน Windows บูต: วางช็อตคัตของ `amg65.exe` ใน
+`shell:startup` (กด Win+R พิมพ์ `shell:startup` แล้ววางไฟล์)
+
 ## จอ LED
 
 ```bash
