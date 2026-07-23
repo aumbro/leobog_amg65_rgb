@@ -141,6 +141,10 @@ def cmd_show(args: argparse.Namespace) -> int:
 
     sink = sinks[0] if len(sinks) == 1 else MultiSink(*sinks)
     engine = Engine(sink, fps=args.fps)
+    # `amg65 stop` จากอีกโปรเซสสั่งให้ลูปวาดหยุดแล้วปิด HID สะอาด
+    from .device import listen_for_stop
+
+    listen_for_stop(engine.shutdown)
     stalled = False
     try:
         engine.run(scene, duration=args.seconds)
@@ -156,6 +160,24 @@ def cmd_show(args: argparse.Namespace) -> int:
     dropped = getattr(sink, "drops", 0)
     print(f"\nจบ — FPS จริงล่าสุด {engine.actual_fps:.1f}" + (f", เฟรมหลุด {dropped}" if dropped else ""))
     return 1 if stalled else 0
+
+
+def cmd_stop(_args: argparse.Namespace) -> int:
+    from .device import request_stop
+
+    result = request_stop()
+    if result == "idle":
+        print("ไม่มีโปรแกรม amg65 รันอยู่")
+        return 0
+    if result == "stopped":
+        print("ปิดเรียบร้อย")
+        return 0
+    if result == "forced":
+        print("ปิดปกติไม่ตอบสนอง — บังคับปิดโปรเซสให้แล้ว")
+        print("  แนะนำรัน `python -m amg65 doctor` ตรวจว่า endpoint ไม่ค้าง")
+        return 0
+    print("ปิดไม่สำเร็จ — โปรเซสค้างและหา PID ไม่เจอ (ลง psutil หรือปิดจาก Task Manager)")
+    return 1
 
 
 def cmd_tray(args: argparse.Namespace) -> int:
@@ -336,6 +358,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
+
+    p_stop = sub.add_parser("stop", help="ปิดโปรแกรม amg65 ที่รันอยู่ (tray/show) อย่างสะอาด")
+    p_stop.set_defaults(func=cmd_stop)
 
     p_tray = sub.add_parser("tray", help="ไอคอนถาดระบบ สลับ scene ได้ ไม่ต้องเปิดคอนโซลค้าง")
     p_tray.add_argument("--scene", choices=tuple(scenes.REGISTRY), default="clock")

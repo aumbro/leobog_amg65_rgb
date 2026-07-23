@@ -125,6 +125,11 @@ class Tray:
                 last_drops = drops
                 threading.Event().wait(1.0)
 
+        # `amg65 stop` จากอีกโปรเซสจะสั่งปิด icon อย่างสะอาด (ปิด HID ก่อนตาย)
+        from .device import listen_for_stop
+
+        listen_for_stop(icon.stop)
+
         threading.Thread(target=refresh, daemon=True).start()
         icon.run()
 
