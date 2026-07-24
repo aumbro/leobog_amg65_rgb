@@ -14,7 +14,16 @@ from __future__ import annotations
 
 import time
 
-from .device import CMD_APPLY, CMD_BEGIN, CMD_FINALIZE, CMD_STREAM, CMD_UPLOAD, TRAILER, Link
+from .device import (
+    CMD_APPLY,
+    CMD_BEGIN,
+    CMD_FINALIZE,
+    CMD_STREAM,
+    CMD_UPLOAD,
+    TRAILER,
+    EndpointStalled,
+    Link,
+)
 from . import font
 
 WIDTH = 63
@@ -234,15 +243,30 @@ class Matrix:
         ถ้าไม่ได้คำตอบในเวลา ค่อยถอยไปใช้ delay แบบเดิมเป็นตาข่ายกันตก
         """
         self.link.send(payload)
-        if self.use_ack:
-            if self.link.read_ack():
-                return  # เครื่องตอบแล้ว = พร้อมรับตัวต่อไป ไม่ต้องหน่วงเพิ่ม
+        if not self.use_ack:
+            if fallback_delay > 0:
+                time.sleep(fallback_delay)
+            return
+
+        if self.link.read_ack():
+            return  # เครื่องตอบแล้ว = พร้อมรับตัวต่อไป ไม่ต้องหน่วงเพิ่ม
+
+        # ไม่ตอบในรอบแรก = เครื่องกำลังยุ่ง ให้เวลามันอีกก่อนตัดสิน
+        # **ห้ามยิงต่อทันที** — ทดสอบแล้วพบว่าพอ ACK พลาดตัวเดียวแล้วยิงต่อ
+        # endpoint ค้างทันทีภายในไม่กี่วินาที เครื่องยังไม่พร้อมแปลว่ายังไม่พร้อมจริง ๆ
+        if self.link.read_ack(timeout_ms=250):
             self.acks_missed += 1
-        if fallback_delay > 0:
-            time.sleep(fallback_delay)
+            return
+        self.acks_missed += 1
+        raise EndpointStalled(
+            "เครื่องไม่ตอบรับ (ACK) — หยุดส่งเพื่อไม่ให้ endpoint ค้าง\n"
+            "  ถ้าเกิดบ่อย ให้ถอดสาย USB เสียบใหม่"
+        )
 
     def enter_stream(self) -> None:
         """เข้าโหมด stream ครั้งเดียว (ใช้ตอน header_every_frame = False)."""
+        if self.use_ack:
+            self.link.drain()  # ล้าง ACK เก่าค้างคิว ไม่งั้นจังหวะเพี้ยนตั้งแต่ต้น
         self._step(self._begin_payload(), self.command_delay)
         self._step(self._stream_payload(), self.command_delay)
         self._stream_ready = True
@@ -255,6 +279,10 @@ class Matrix:
             raise ValueError("payload ของเฟรมต้องยาว 960 ไบต์")
         try:
             if self.header_every_frame:
+                if self.use_ack and not self._stream_ready:
+                    # เฟรมแรกของ session: ล้าง ACK ค้างจากรอบก่อน/โปรแกรมอื่น
+                    self.link.drain()
+                    self._stream_ready = True
                 self._step(self._begin_payload(), self.command_delay)
                 self._step(self._stream_payload(), self.command_delay)
             elif not self._stream_ready:

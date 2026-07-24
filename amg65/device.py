@@ -261,6 +261,27 @@ class Link:
         except OSError:
             return b""
 
+    def drain(self, limit: int = 64) -> int:
+        """ทิ้ง ACK ที่ค้างในคิวให้หมดก่อนเริ่มรอบใหม่
+
+        ถ้ารอบก่อนจบกลางคัน (หรือโปรแกรมอื่นเพิ่งใช้อุปกรณ์) จะมี ACK เก่าค้างอยู่
+        พอเราเริ่มส่งแล้วอ่าน จะได้ ACK ของ report เก่ามาแทนของจริง = เสียจังหวะ
+        แล้วลามจนค้าง จึงต้องล้างคิวให้สะอาดก่อนเสมอ
+        """
+        if self.dry_run or self.dev is None:
+            return 0
+        cleared = 0
+        for _ in range(limit):
+            try:
+                # ⚠️ ห้ามใส่ timeout 0 — ใน hidapi ของ Python นั่นแปลว่า "รอตลอดไป"
+                # (blocking) ไม่ใช่ "ไม่รอ" ใส่ 0 แล้วค้างตรงนี้ตั้งแต่ยังไม่ได้ส่งอะไร
+                if not self.dev.read(self.report_bytes, 2):
+                    break
+            except OSError:
+                break
+            cleared += 1
+        return cleared
+
     def send(self, payload: bytes | bytearray, retries: int = 3) -> None:
         """ส่ง payload หนึ่ง report; retry แล้วเปิด endpoint ใหม่ถ้าจำเป็น."""
         if len(payload) > self.report_bytes - 1:
