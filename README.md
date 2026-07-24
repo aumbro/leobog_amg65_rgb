@@ -14,11 +14,13 @@
 > written in Thai):
 > - The matrix is **63×5 = 315 pixels**, but device memory order is *not* left-to-right.
 >   It is four row-major 14×5 blocks followed by a separate 7×5 right panel.
-> - **Live streaming tops out at ~5-6 FPS.** Sending faster makes the device *silently
->   drop reports* — `hid_write` still returns success — which shifts the remaining data by
->   64 bytes (21.3 pixels) and scatters pixels to wrong positions. Push harder and the
->   HID output endpoint wedges permanently until you unplug and replug the cable.
->   Both vendor endpoints (`MI_02` and `MI_03`) can wedge this way.
+> - **The protocol is request/response, not fire-and-forget.** The device ACKs *every*
+>   report (`04 18` → `04 18 00 01`, RGB chunk → `04 41 00 01`, …) and the sender must
+>   wait for it. It also needs a deliberate **111 ms gap between frames** (the official
+>   software streams at exactly 9 FPS) so the firmware can finish repainting the panel.
+>   Blast reports without reading the ACKs and the HID endpoint wedges permanently —
+>   only a physical replug clears it. This was found by capturing USB traffic from the
+>   official driver; the capture and analysis tools are included in the repo.
 > - **Byte 2 of the upload header (`0x0C`) is a per-frame delay, 10 ms per unit.**
 >   The official software hardcodes it to 8.3 FPS — but the panel runs at up to **83 FPS**.
 >   Uploading an animation into the device is therefore ~15× smoother than streaming,
@@ -113,30 +115,29 @@ python -m amg65 show marquee --text "SAWATDEE"
 
 ออกจากโปรแกรมด้วย `Ctrl+C` หรือกด `q`
 
-### เรื่อง FPS — อย่าลด delay ต่ำกว่า 8.5 ms
+### เรื่อง FPS — โปรโตคอลเป็น request/response
 
-เพดาน live stream ของฮาร์ดแวร์นี้คือ **ราว 5-6 FPS** และ **8.5 ms คือค่าเดียวที่ภาพสะอาด**
-วัดมาครบทุกค่าแล้ว (ดู §9 ใน `AMG65_REVERSE_ENGINEERING.md`)
+**จอนี้ตอบรับ (ACK) ทุก report ที่ส่งไป และต้องรอคำตอบก่อนส่งตัวถัดไป**
+ค้นพบจากการจับ USB ของโปรแกรมทางการ (`capture_usb.bat` + `analyze_capture.py`)
+รายละเอียดเต็มอยู่ใน §7.4-7.5 ของ `AMG65_REVERSE_ENGINEERING.md`
 
-| delay | FPS | ผล |
-|---:|---:|---|
-| 8.5 ms | 5.3 | สะอาด — ใช้ค่านี้ |
-| 6.0 | 6.5 | มีดอตโผล่ผิดตำแหน่ง |
-| 4.0 | 8.3 | มีดอตโผล่ผิดตำแหน่ง |
-| 2.0 | 10.8 | ดอตหลง + endpoint ค้างใน 12 วินาที |
-| 0.0 | 18.3 | ค้างทุกครั้ง |
+สูตรที่ถูกต้องมีสามชิ้น — ขาดชิ้นใดชิ้นหนึ่งแล้ว endpoint ค้าง:
 
-ส่งเร็วเกินไปเครื่องจะ **ทิ้ง report เงียบ ๆ** โดย `hid_write` ยังคืน 65 ปกติไม่มี error
-ข้อมูลที่เหลือเลื่อนไป 64 ไบต์ = 21.3 พิกเซล พิกเซลจึงไปโผล่ผิดตำแหน่ง
-ถ้าหนักกว่านั้นคิวล้นจน endpoint ค้างถาวร ต้องถอดสาย USB เสียบใหม่
-**ดอตหลงคือสัญญาณเตือนว่ากำลังจะค้าง**
-
-⚠️ ถ้าจะทดลองเอง อย่าเชื่อการกวาดสั้น ๆ — มันให้ผลลวงมาแล้วสองครั้ง
-ต้อง soak ยาวและดูด้วยตา เพราะโปรแกรมตรวจดอตหลงไม่ได้
-
-```bash
-python bench_fps.py --soak 8.5 --delay-data 6 --seconds 180
+```text
+ต่อ packet : ส่ง -> รอ ACK (~2.8 ms)   ห้ามยิงต่อถ้าไม่ได้ ACK
+ต่อ frame  : เว้นให้ครบ 111 ms         ให้เฟิร์มแวร์วาดจอเสร็จก่อน (= 9 FPS)
+ก่อนเริ่ม  : drain() ล้าง ACK เก่าค้างคิว
 ```
+
+โปรแกรมทำให้ครบทั้งสามอย่างแล้ว ไม่ต้องตั้งค่าอะไรเอง — `--delay` ที่เหลืออยู่
+เป็นเพียงตาข่ายกันตกตอนเครื่องไม่ตอบ
+
+ผลที่ได้: **9.0 FPS** (จากเดิม 5.3) และเสถียรขึ้นมาก — soak ที่ยิงเต็มทุกเฟรม
+นิ่งได้ 168 วินาที / 28,519 packet โดย ACK ไม่พลาดเลย (เดิมค้างใน 13 วินาที)
+scene ที่ภาพนิ่งกว่าอย่างนาฬิกา (ข้ามเฟรมซ้ำได้) ใช้งานจริงอยู่ได้ยาวโดยไม่หลุด
+
+⚠️ สตรีมต่อเนื่องนาน ๆ ยังมีโอกาสค้างอยู่ ถ้าอยากได้ภาพที่ค้างไม่ได้เลย
+ใช้ `upload` แทน (ไม่มีทราฟฟิกระหว่างแสดงผล)
 
 หมายเหตุ: `time.sleep(1ms)` บน Windows จริง ๆ กินราว 2.8ms เพราะ timer resolution หยาบ
 ค่า delay ต่ำ ๆ จึงไม่ได้ผลเป็นเส้นตรงตามที่ตั้ง
