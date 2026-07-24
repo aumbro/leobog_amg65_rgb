@@ -37,9 +37,8 @@ def _icon_image(canvas, active: str):
 
 
 class Tray:
-    # หน่วง 12ms (จากค่าเดิม 8.5) สำหรับแอปที่เปิดทั้งวัน — ยิ่งหน่วงนานเครื่องยิ่งมี
-    # เวลาระบาย โอกาสค้างน้อยลง และ scene แบบนาฬิกา/sysmon ตาไม่เห็นความต่าง
-    # (แถม frame-skip ตัดเฟรมซ้ำออกอีก ทราฟฟิกจริงต่ำกว่านี้มาก)
+    # delay ที่ส่งเข้า Matrix เป็นแค่ตาข่ายกันตกแล้ว — จังหวะจริงมาจากการรอ ACK
+    # (~2.8ms/packet) บวกการเว้นเฟรม 111ms ตามที่ถอดจากโปรแกรมทางการ
     def __init__(self, start_scene: str = "clock", delay_ms: float = 12.0) -> None:
         self.delay = delay_ms / 1000.0
         self.current = start_scene
