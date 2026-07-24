@@ -44,6 +44,13 @@ MAX_CHANNEL = 0xFE
 # ฟิตได้ delay = min(10 x speed, 500) + 2   โดย 2 ms คือเวลาสลับเฟรมของเฟิร์มแวร์เอง
 FRAME_UNIT_MS = 10.0
 FRAME_OVERHEAD_MS = 2.0
+
+# จังหวะระหว่างเฟรมของ live stream — ถอดจากการจับ USB ของโปรแกรมทางการ
+# ทางการเว้น 111 ms ต่อเฟรมสม่ำเสมอมาก (104-123) = 9 FPS ทั้งที่ส่ง packet
+# ครบเฟรมใช้เวลาแค่ ~53 ms แปลว่ามัน **นั่งเฉย ๆ อีก ~58 ms โดยตั้งใจ**
+# ให้เฟิร์มแวร์มีเวลาวาดจอให้เสร็จก่อนรับเฟรมใหม่
+# ยิงติด ๆ กันที่ 18.5 FPS (เร็วกว่าทางการ 2 เท่า) ทดสอบแล้วค้างใน 13 วินาที
+MIN_FRAME_INTERVAL = 0.111
 MAX_FRAME_DELAY_MS = 500.0
 SPEED_DEFAULT = 0x0C
 FASTEST_FPS = 1000.0 / (FRAME_UNIT_MS + FRAME_OVERHEAD_MS)  # ~83 FPS
@@ -204,8 +211,11 @@ class Matrix:
         data_delay: float | None = None,
         command_delay: float | None = None,
         use_ack: bool = True,
+        min_frame_interval: float = MIN_FRAME_INTERVAL,
     ) -> None:
         self.link = link
+        self.min_frame_interval = min_frame_interval
+        self._next_frame_at = 0.0
         # เมื่อ use_ack เปิด (ค่าเริ่มต้น) delay เหล่านี้เป็นแค่ตาข่ายกันตกตอนเครื่องไม่ตอบ
         self.data_delay = packet_delay if data_delay is None else data_delay
         self.command_delay = packet_delay if command_delay is None else command_delay
@@ -277,6 +287,12 @@ class Matrix:
     def show_raw(self, raw: bytes | bytearray) -> None:
         if len(raw) != 960:
             raise ValueError("payload ของเฟรมต้องยาว 960 ไบต์")
+        # เว้นจังหวะให้เฟิร์มแวร์วาดจอเสร็จก่อน ยิงติดกันเกินไปทำให้ค้าง
+        wait = self._next_frame_at - time.perf_counter()
+        if wait > 0:
+            time.sleep(wait)
+        self._next_frame_at = time.perf_counter() + self.min_frame_interval
+
         try:
             if self.header_every_frame:
                 if self.use_ack and not self._stream_ready:
