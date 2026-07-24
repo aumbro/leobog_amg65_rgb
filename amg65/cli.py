@@ -162,6 +162,38 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 1 if stalled else 0
 
 
+def cmd_keyfx(args: argparse.Namespace) -> int:
+    """ไฟใต้ปุ่ม 67 ดวงเต้นตามเสียง / เอฟเฟกต์อื่น ๆ"""
+    from . import keyfx
+
+    try:
+        effect = keyfx.EFFECTS[args.effect]()
+    except ImportError as exc:
+        print(f"เอฟเฟกต์ {args.effect!r} ต้องใช้ soundcard กับ numpy\n  ({exc})")
+        return 2
+
+    print(f"ไฟใต้ปุ่ม: {args.effect} ที่ {args.fps:.0f} FPS — Ctrl+C เพื่อออก")
+    try:
+        with Link("control") as link:
+            keyboard = KeyboardLight(link)
+            try:
+                keyboard.stream_effect(effect, fps=args.fps)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                # live preview ดับเองเมื่อหยุดส่ง แต่สั่งดับให้ชัดเจนกว่า
+                keyboard.set_per_key({})
+            if keyboard.acks_missed:
+                print(f"ACK พลาด {keyboard.acks_missed} ครั้ง")
+    except EndpointStalled as exc:
+        print(f"\n{exc}")
+        return 1
+    except (OSError, DeviceNotFound) as exc:
+        print(f"\nเปิดคีย์บอร์ดไม่ได้: {exc}")
+        return 1
+    return 0
+
+
 def cmd_stop(_args: argparse.Namespace) -> int:
     from .device import request_stop
 
@@ -359,6 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
 
+    p_keyfx = sub.add_parser("keyfx", help="ไฟใต้ปุ่ม 67 ดวงเต้นตามเสียง / คลื่นสี")
+    p_keyfx.add_argument("effect", nargs="?", default="spectrum", choices=("spectrum", "wave", "ripple"))
+    p_keyfx.add_argument("--fps", type=float, default=9.0, help="รอบต่อวินาที")
+    p_keyfx.set_defaults(func=cmd_keyfx)
+
     p_stop = sub.add_parser("stop", help="ปิดโปรแกรม amg65 ที่รันอยู่ (tray/show) อย่างสะอาด")
     p_stop.set_defaults(func=cmd_stop)
 
@@ -428,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # คำสั่งที่เขียนเข้าอุปกรณ์จริง ต้องมีตัวเดียวในระบบ
-_EXCLUSIVE = {"show", "tray", "upload", "keys", "light"}
+_EXCLUSIVE = {"show", "tray", "upload", "keys", "keyfx", "light"}
 
 
 def main(argv: list[str] | None = None) -> int:

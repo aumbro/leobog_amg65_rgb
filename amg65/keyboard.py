@@ -108,6 +108,51 @@ class KeyboardLight:
         self._step(CMD_APPLY)
         self._step(CMD_FINALIZE)
 
+    def _write_table(self, table: bytearray, init: bytearray, stream_delay: float) -> None:
+        """ส่งตารางสี 512 ไบต์หนึ่งรอบ (init + 8 ก้อน)."""
+        self._step(init, stream_delay)
+        for offset in range(0, len(table), 64):
+            self._step(table[offset : offset + 64], stream_delay)
+
+    @staticmethod
+    def _fill_table(table: bytearray, colors: dict[str, tuple[int, int, int]]) -> None:
+        by_index = {KEY_INDEX[key]: rgb for key, rgb in colors.items() if key in KEY_INDEX}
+        for slot, index in enumerate(LIGHT_ORDER):
+            r, g, b = by_index.get(index, (0, 0, 0))
+            table[slot * 4 : slot * 4 + 4] = bytes((index, r, g, b))
+
+    def stream_effect(self, effect, fps: float = 9.0, stream_delay: float = 0.025) -> None:
+        """สตรีมเอฟเฟกต์ไฟใต้ปุ่มต่อเนื่องจนกด Ctrl+C
+
+        `effect` ต้องมี start() / stop() / colors(elapsed) -> {ชื่อปุ่ม: (r,g,b)}
+        (ดู amg65/keyfx.py)
+
+        จังหวะระหว่างรอบใช้หลักเดียวกับ matrix — ยิงติดกันเกินไปทำให้ endpoint ค้าง
+        รอบหนึ่งมี 9 packet (init + 8) ซึ่งน้อยกว่า matrix (19) จึงเร็วกว่าได้
+        """
+        table = bytearray(0x200)
+        init = bytearray(64)
+        init[0:2] = CMD_PER_KEY
+        init[8] = 0x08
+
+        interval = 1.0 / max(fps, 0.5)
+        # เริ่มเอฟเฟกต์ก่อน (บางตัวเปิด thread จับเสียง ใช้เวลาตั้งตัว) แล้วค่อยล้างคิว
+        # ให้ชิดกับการส่งจริงที่สุด — ถ้าล้างแล้วปล่อยว่างนาน มีอะไรเข้าคิวมาก็เสียจังหวะ
+        effect.start()
+        if self.use_ack:
+            self.link.drain()
+        started = time.perf_counter()
+        try:
+            while True:
+                loop_start = time.perf_counter()
+                self._fill_table(table, effect.colors(loop_start - started))
+                self._write_table(table, init, stream_delay)
+                remaining = interval - (time.perf_counter() - loop_start)
+                if remaining > 0:
+                    time.sleep(remaining)
+        finally:
+            effect.stop()
+
     def set_per_key(
         self,
         colors: dict[str, tuple[int, int, int]],
@@ -134,7 +179,7 @@ class KeyboardLight:
             self.link.drain()  # ล้าง ACK เก่าค้างคิวก่อนเริ่ม ไม่งั้นจังหวะเพี้ยน
 
         next_round = 0.0
-        while True:
+        while True:  # noqa: PLR1702
             # เว้นจังหวะระหว่างรอบเหมือน matrix — ยิงรัวติดกันทำให้ endpoint ค้าง
             wait = next_round - time.perf_counter()
             if wait > 0:
