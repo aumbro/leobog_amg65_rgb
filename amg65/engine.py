@@ -75,14 +75,25 @@ class MatrixSink:
         self.resilient = resilient
         self.drops = 0
         self.connected = True
+        self.sent = 0
+        self.skipped = 0
         self._cooldown_until = 0.0
         self._backoff = 0.5
+        self._last_sent: list | None = None
 
     def show(self, canvas: Canvas) -> None:
         if self.resilient and time.perf_counter() < self._cooldown_until:
             return  # อยู่ในช่วงพักหลังค้าง ไม่ยิงเพื่อไม่ให้บล็อกทีละวินาที
+        # เฟรมเหมือนเดิมเป๊ะไม่ต้องส่งซ้ำ เฟิร์มแวร์ค้างภาพสุดท้ายไว้เองอยู่แล้ว
+        # นาฬิกา/sysmon เปลี่ยนภาพไม่กี่ครั้งต่อวินาที ตัดทราฟฟิกที่ไม่จำเป็นออก
+        # = ลดโอกาส endpoint ค้างโดยไม่เสียอะไรเลย
+        if self.connected and canvas.pixels == self._last_sent:
+            self.skipped += 1
+            return
         try:
             self.matrix.show(canvas)
+            self._last_sent = list(canvas.pixels)
+            self.sent += 1
             self.connected = True
             self._backoff = 0.5
         except EndpointStalled:
@@ -90,15 +101,20 @@ class MatrixSink:
                 raise
             # ค้าง: ปิด handle แล้วพักก่อนลองใหม่ ยิ่งค้างซ้ำยิ่งพักนานขึ้น (สูงสุด 5 วิ)
             self.matrix.link.close()
-            self.connected = False
-            self.drops += 1
+            self._on_lost()
             self._cooldown_until = time.perf_counter() + self._backoff
             self._backoff = min(self._backoff * 1.6, 5.0)
         except OSError:
             # หลุด/ถอดสาย: เฟรมเดียวหายดีกว่าตาย เฟรมหน้าเปิด handle ใหม่ให้เอง
-            self.drops += 1
-            if self.resilient:
-                self.connected = False
+            self._on_lost()
+
+    def _on_lost(self) -> None:
+        self.drops += 1
+        # ลืมเฟรมล่าสุด เพื่อบังคับส่งใหม่ตอนกลับมา — พอหลุดแล้วเฟิร์มแวร์อาจกลับไป
+        # เอฟเฟกต์เดิมของมัน ถ้าไม่ส่งใหม่เพราะ "เฟรมเหมือนเดิม" จอจะไม่กลับมาเป็นของเรา
+        self._last_sent = None
+        if self.resilient:
+            self.connected = False
 
     def close(self) -> None:
         self.matrix.link.close()

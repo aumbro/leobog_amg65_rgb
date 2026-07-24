@@ -37,7 +37,10 @@ def _icon_image(canvas, active: str):
 
 
 class Tray:
-    def __init__(self, start_scene: str = "clock", delay_ms: float = 8.5) -> None:
+    # หน่วง 12ms (จากค่าเดิม 8.5) สำหรับแอปที่เปิดทั้งวัน — ยิ่งหน่วงนานเครื่องยิ่งมี
+    # เวลาระบาย โอกาสค้างน้อยลง และ scene แบบนาฬิกา/sysmon ตาไม่เห็นความต่าง
+    # (แถม frame-skip ตัดเฟรมซ้ำออกอีก ทราฟฟิกจริงต่ำกว่านี้มาก)
+    def __init__(self, start_scene: str = "clock", delay_ms: float = 12.0) -> None:
         self.delay = delay_ms / 1000.0
         self.current = start_scene
         self.engine: Engine | None = None
