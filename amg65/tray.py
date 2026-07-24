@@ -87,6 +87,15 @@ class Tray:
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
+        # ถ้า scene แรกโหลดไม่ขึ้น worker จะตายทันทีแล้วไอคอนกลายเป็นสี่เหลี่ยมเปล่า
+        # กดอะไรก็ไม่เกิดอะไร — เงียบเกินไปจนหาสาเหตุไม่เจอ (เคยเจอตอนแพ็กเป็น exe
+        # แล้ว PyInstaller ไม่ได้แพ็ก scene มาด้วย เพราะทะเบียน import แบบไดนามิก)
+        # จึงรอสั้น ๆ แล้วเช็คก่อน ให้ล้มตั้งแต่ต้นพร้อมบอกเหตุผล
+        self._thread.join(timeout=1.5)
+        if self._error is not None:
+            sink.close()
+            raise RuntimeError(f"scene แรกเริ่มไม่ได้: {self._error}")
+
         menu_items = [
             pystray.MenuItem(
                 f"{name} — {description}",

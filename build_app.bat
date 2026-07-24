@@ -4,7 +4,11 @@ REM ต้องมี: pip install pyinstaller
 REM --onedir (โฟลเดอร์) แทน --onefile: เชื่อถือได้กว่า ไม่โดน antivirus ล็อกตอน self-extract
 REM ผลลัพธ์: dist\amg65\amg65.exe  (แจกทั้งโฟลเดอร์ dist\amg65\ หรือ zip)
 
+REM --collect-submodules amg65 สำคัญมาก: ทะเบียน scene ใช้ import_module() แบบไดนามิก
+REM PyInstaller อ่านโค้ดแบบสถิตจึงมองไม่เห็น ถ้าไม่ใส่จะแพ็กมาแค่ scenes.base ตัวเดียว
+REM แล้วแอปจะเปิดได้แต่ไม่มี scene ให้เล่นเลย
 pyinstaller --onedir --noconsole --name amg65 --noconfirm ^
+  --collect-submodules amg65 ^
   --collect-all hid ^
   --collect-all pystray ^
   --collect-all PIL ^
