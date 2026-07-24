@@ -27,22 +27,29 @@ class ClockScene(Scene):
         now = time.time()
         text = time.strftime("%H:%M:%S")
 
-        # จัดตัวอักษรลงช่อง 7 px ต่อตัว ไม่ให้ glyph คร่อมรอยต่อบล็อก 14×5 ของฮาร์ดแวร์
+        # **ทุกอย่างขยับเป็นสเต็ปครึ่งวินาที ไม่ไล่ต่อเฟรม** — ภาพจึงเหมือนเดิมเป๊ะ
+        # ภายในแต่ละครึ่งวินาที ทำให้ frame-skip ตัดเฟรมซ้ำออกได้เกือบหมด
+        # เหลือส่งจริงแค่ ~2 ครั้ง/วินาที = ทราฟฟิกต่ำสุด = โอกาสค้างต่ำสุด
+        # (เดิมไล่เฉดสีทุกเฟรม แทบทุกเฟรมต่างกัน frame-skip เลยช่วยไม่ได้)
+        half = int(now * 2)              # เปลี่ยนทุกครึ่งวินาที
+        hue_base = (half * 0.03) % 1.0   # สีไล่ช้า ๆ แต่เป็นขั้น
+        colon_dim = half % 2 == 0
+
         for module, char in enumerate(text):
             width = font.char_width(char)
             x0 = module * MODULE + (MODULE - width) // 2
-            dim = char == ":" and int(now * 2) % 2 == 0
+            dim = char == ":" and colon_dim
 
             def color_of(_position: int, px: int, _py: int, dim=dim) -> tuple[int, int, int]:
-                hue = (now * 0.075 + px / 80.0) % 1.0
+                hue = (hue_base + px / 80.0) % 1.0
                 r, g, b = colorsys.hsv_to_rgb(hue, 0.88, 0.42 if dim else 1.0)
                 return int(r * 254), int(g * 254), int(b * 254)
 
             canvas.text(char, x0, color_of=color_of)
 
-        # แผงขวาแยกกายภาพจากแผงหลัก ให้มันมีชีวิตของตัวเอง
-        invader = INVADER_FRAMES[(frame // 3) % len(INVADER_FRAMES)]
-        r, g, b = colorsys.hsv_to_rgb((now * 0.20) % 1.0, 1.0, 1.0)
+        # แผงขวา: invader ก้าวทุกครึ่งวินาทีเช่นกัน (เดิมทุก 3 เฟรม = ถี่กว่ามาก)
+        invader = INVADER_FRAMES[half % len(INVADER_FRAMES)]
+        r, g, b = colorsys.hsv_to_rgb(hue_base, 1.0, 1.0)
         color = (int(r * 254), int(g * 254), int(b * 254))
         for y, row in enumerate(invader):
             for dx, bit in enumerate(row):
