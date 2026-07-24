@@ -173,6 +173,16 @@ class Tray:
             print(f"เปิดคีย์บอร์ดไม่ได้: {exc}")
             return 1
 
+        # ซิงค์เวลาเข้า RTC ของคีย์บอร์ดตอนเปิดแอป — นาฬิกาในเฟิร์มแวร์จะได้ตรง
+        # (โปรแกรมทางการก็ทำแบบนี้) นาฬิกาในตัวเครื่องไม่ต้องสตรีมเลยจึงไม่มีวันค้าง
+        # และเดินต่อแม้ปิดคอม เป็นทางที่ดีกว่าสตรีมนาฬิกาจากเราทุกด้าน
+        try:
+            from .keyboard import KeyboardLight
+
+            KeyboardLight(self.link).set_time()
+        except OSError:
+            pass  # ตั้งเวลาไม่สำเร็จไม่ควรทำให้เปิดแอปไม่ได้
+
         # resilient: endpoint หลุด/ค้าง ไม่ทำให้ tray ตาย เสียบสายกลับแล้วยิงต่อเอง
         sink = MatrixSink(Matrix(self.link, packet_delay=self.delay), resilient=True)
         self.sink = sink
