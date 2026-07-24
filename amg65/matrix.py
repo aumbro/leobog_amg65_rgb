@@ -194,12 +194,16 @@ class Matrix:
         flush_every_frame: bool = True,
         data_delay: float | None = None,
         command_delay: float | None = None,
+        use_ack: bool = True,
     ) -> None:
         self.link = link
+        # เมื่อ use_ack เปิด (ค่าเริ่มต้น) delay เหล่านี้เป็นแค่ตาข่ายกันตกตอนเครื่องไม่ตอบ
         self.data_delay = packet_delay if data_delay is None else data_delay
         self.command_delay = packet_delay if command_delay is None else command_delay
         self.header_every_frame = header_every_frame
         self.flush_every_frame = flush_every_frame
+        self.use_ack = use_ack
+        self.acks_missed = 0
         self._stream_ready = False
 
     @property
@@ -220,12 +224,27 @@ class Matrix:
         payload[8] = 0x0F
         return payload
 
+    def _step(self, payload: bytes | bytearray, fallback_delay: float) -> None:
+        """ส่งหนึ่ง report แล้วรอให้เครื่องตอบรับก่อนไปตัวถัดไป
+
+        นี่คือกลไกจริงของโปรโตคอล (ยืนยันจากการจับ USB ของโปรแกรมทางการ):
+        เครื่องตอบรับทุก report และผู้ส่งต้องรอคำตอบ = flow control ในตัว
+        ถ้าไม่รอ คำตอบจะค้างสะสมในคิว IN จน endpoint ค้าง — ต้นเหตุที่ตามหามาทั้งวัน
+
+        ถ้าไม่ได้คำตอบในเวลา ค่อยถอยไปใช้ delay แบบเดิมเป็นตาข่ายกันตก
+        """
+        self.link.send(payload)
+        if self.use_ack:
+            if self.link.read_ack():
+                return  # เครื่องตอบแล้ว = พร้อมรับตัวต่อไป ไม่ต้องหน่วงเพิ่ม
+            self.acks_missed += 1
+        if fallback_delay > 0:
+            time.sleep(fallback_delay)
+
     def enter_stream(self) -> None:
         """เข้าโหมด stream ครั้งเดียว (ใช้ตอน header_every_frame = False)."""
-        self.link.send(self._begin_payload())
-        time.sleep(self.command_delay)
-        self.link.send(self._stream_payload())
-        time.sleep(self.command_delay)
+        self._step(self._begin_payload(), self.command_delay)
+        self._step(self._stream_payload(), self.command_delay)
         self._stream_ready = True
 
     def show(self, canvas: Canvas) -> None:
@@ -236,19 +255,15 @@ class Matrix:
             raise ValueError("payload ของเฟรมต้องยาว 960 ไบต์")
         try:
             if self.header_every_frame:
-                self.link.send(self._begin_payload())
-                time.sleep(self.command_delay)
-                self.link.send(self._stream_payload())
-                time.sleep(self.command_delay)
+                self._step(self._begin_payload(), self.command_delay)
+                self._step(self._stream_payload(), self.command_delay)
             elif not self._stream_ready:
                 self.enter_stream()
             for offset in range(0, 960, 64):
-                self.link.send(raw[offset : offset + 64])
-                time.sleep(self.data_delay)
+                self._step(raw[offset : offset + 64], self.data_delay)
             if self.flush_every_frame:
-                self.link.send(bytes(64))
-                time.sleep(self.command_delay)
-            self.link.send(CMD_APPLY)
+                self._step(bytes(64), self.command_delay)
+            self._step(CMD_APPLY, 0.0)
         except OSError:
             # Link retry หมดแล้วยังไม่ผ่าน — ถือว่าหลุดโหมด ต้องเข้าใหม่รอบหน้า
             self._stream_ready = False

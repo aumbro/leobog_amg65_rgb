@@ -236,6 +236,31 @@ class Link:
                     raise
                 time.sleep(0.250)
 
+    def read_ack(self, timeout_ms: int = 60) -> bytes:
+        """อ่านคำตอบรับจากเครื่องหลังส่งหนึ่ง report
+
+        **นี่คือหัวใจของโปรโตคอลที่เราไม่รู้มาตลอด** — จับ USB จากโปรแกรมทางการแล้วพบว่า
+        เครื่องตอบรับ *ทุก* report ที่ส่งไป และทางการรออ่านคำตอบก่อนส่งตัวถัดไปเสมอ
+        (OUT 18,934 ครั้ง : IN 18,932 ครั้ง = 1:1)
+
+            ส่ง 04 18       -> ตอบ 04 18 00 01
+            ส่ง 04 35       -> ตอบ 04 35 00 01
+            ส่งข้อมูล RGB   -> ตอบ 04 41 00 01
+            ส่ง 04 02       -> ตอบ 04 02 00 01
+
+        เดิมเรายิงรัวโดยไม่เคยอ่านเลย คำตอบจึงค้างสะสมในคิว IN จน endpoint ค้าง
+        และเราไปชดเชยด้วยการเดา delay คงที่ (8.5 ms) ซึ่งไม่ใช่กลไกจริงของมัน
+        เวลาตอบจริงมีค่ากลาง 2.8 ms และแปรผันตามงานที่เครื่องกำลังทำ
+
+        คืน b"" ถ้าไม่มีคำตอบภายในเวลา (ไม่ถือว่าพัง — เฟิร์มแวร์บางจังหวะไม่ตอบ)
+        """
+        if self.dry_run or self.dev is None:
+            return b""
+        try:
+            return bytes(self.dev.read(self.report_bytes, timeout_ms))
+        except OSError:
+            return b""
+
     def send(self, payload: bytes | bytearray, retries: int = 3) -> None:
         """ส่ง payload หนึ่ง report; retry แล้วเปิด endpoint ใหม่ถ้าจำเป็น."""
         if len(payload) > self.report_bytes - 1:

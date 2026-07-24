@@ -6,3 +6,4 @@ build/
 dist/
 *.spec
 amg65.log
+capture_bus*.pcap
