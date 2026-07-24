@@ -8,7 +8,16 @@ from __future__ import annotations
 import random
 import time
 
-from .device import CMD_APPLY, CMD_BEGIN, CMD_EFFECT, CMD_FINALIZE, CMD_PER_KEY, TRAILER, Link
+from .device import (
+    CMD_APPLY,
+    CMD_BEGIN,
+    CMD_EFFECT,
+    CMD_FINALIZE,
+    CMD_PER_KEY,
+    CMD_TIME,
+    TRAILER,
+    Link,
+)
 
 COMMAND_DELAY = 0.200
 
@@ -77,6 +86,43 @@ class KeyboardLight:
             self.acks_missed += 1
         if delay > 0:
             time.sleep(delay)
+
+    def set_time(self, when=None) -> None:
+        """ซิงค์เวลาเข้า RTC ของคีย์บอร์ด
+
+        ถอดจากการจับ USB ของโปรแกรมทางการ — มันส่งคำสั่งนี้ตอนเปิดโปรแกรม
+        แปลว่าคีย์บอร์ดมีนาฬิกาในตัว ไม่ต้องให้คอมป้อนเวลาให้ตลอด
+
+            04 18                          begin
+            04 28  (byte 8 = 01)           เตรียมตั้งเวลา
+            00 00 5A YY MM DD HH MM SS 00 DOW 00
+            04 02                          apply
+
+        YY = ปี ค.ศ. สองหลักท้าย, DOW = วันในสัปดาห์แบบ ISO (จันทร์=1 ... อาทิตย์=7)
+        0x5A ที่ไบต์ 2 คงเป็นรหัสย่อยของคำสั่ง — โปรแกรมทางการส่งค่านี้ทุกครั้ง
+        """
+        import datetime
+
+        when = when or datetime.datetime.now()
+        self._step(CMD_BEGIN)
+
+        init = bytearray(64)
+        init[0:2] = CMD_TIME
+        init[8] = 1
+        self._step(init)
+
+        data = bytearray(64)
+        data[2] = 0x5A
+        data[3] = when.year % 100
+        data[4] = when.month
+        data[5] = when.day
+        data[6] = when.hour
+        data[7] = when.minute
+        data[8] = when.second
+        data[10] = when.isoweekday()
+        self._step(data)
+
+        self._step(CMD_APPLY)
 
     def set_effect(
         self,

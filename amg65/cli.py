@@ -194,6 +194,21 @@ def cmd_keyfx(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_settime(args: argparse.Namespace) -> int:
+    """ซิงค์เวลาเข้า RTC ของคีย์บอร์ด"""
+    import datetime
+
+    when = datetime.datetime.now()
+    try:
+        with Link("control", dry_run=args.dry_run) as link:
+            KeyboardLight(link).set_time(when)
+    except (OSError, DeviceNotFound) as exc:
+        print(f"ตั้งเวลาไม่สำเร็จ: {exc}")
+        return 1
+    print(f"ตั้งเวลาในคีย์บอร์ดเป็น {when:%Y-%m-%d %H:%M:%S} แล้ว")
+    return 0
+
+
 def cmd_stop(_args: argparse.Namespace) -> int:
     from .device import request_stop
 
@@ -405,6 +420,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_keyfx.add_argument("--fps", type=float, default=9.0, help="รอบต่อวินาที")
     p_keyfx.set_defaults(func=cmd_keyfx)
 
+    p_settime = sub.add_parser("set-time", help="ซิงค์เวลาเข้านาฬิกาในคีย์บอร์ด (RTC)")
+    p_settime.add_argument("--dry-run", action="store_true")
+    p_settime.set_defaults(func=cmd_settime)
+
     p_stop = sub.add_parser("stop", help="ปิดโปรแกรม amg65 ที่รันอยู่ (tray/show) อย่างสะอาด")
     p_stop.set_defaults(func=cmd_stop)
 
@@ -474,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # คำสั่งที่เขียนเข้าอุปกรณ์จริง ต้องมีตัวเดียวในระบบ
-_EXCLUSIVE = {"show", "tray", "upload", "keys", "keyfx", "light"}
+_EXCLUSIVE = {"show", "tray", "upload", "keys", "keyfx", "light", "set-time"}
 
 
 def main(argv: list[str] | None = None) -> int:

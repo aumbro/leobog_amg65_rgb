@@ -37,6 +37,7 @@ CMD_EFFECT = b"\x04\x13"
 CMD_PER_KEY = b"\x04\x20"
 CMD_UPLOAD = b"\x04\x33"
 CMD_STREAM = b"\x04\x35"
+CMD_TIME = b"\x04\x28"  # ตั้งเวลา RTC ในคีย์บอร์ด (ถอดจาก capture ของโปรแกรมทางการ)
 
 TRAILER = b"\xAA\x55"
 
