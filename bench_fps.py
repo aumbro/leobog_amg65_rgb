@@ -1,19 +1,19 @@
-"""หาเพดาน FPS จริงของ AMG65 matrix live stream
+"""วัดสุขภาพการสตรีมของ AMG65 — ACK ครบไหม สตรีมได้นานแค่ไหน
 
-โจทย์: ลำดับเดิมส่ง 19 reports/เฟรม (04 18 → 04 35 → RGB×15 → flush → 04 02)
-คูณ delay 8.5ms = ~160ms/เฟรม → เพดาน ~7 FPS ซึ่งหน่วงเกินไปสำหรับ visualizer และเกม
+⚠️ เครื่องมือนี้เคยเป็นตัวกวาดหาค่า `--delay` ที่ดีที่สุด ซึ่งเป็น **คำถามที่ผิด**
+โปรโตคอลนี้เป็น request/response: เครื่องตอบรับทุก report และต้องรอคำตอบก่อนส่งตัวถัดไป
+บวกกับเว้นจังหวะระหว่าง frame 111 ms (ดู §7.4-7.5 ของ AMG65_REVERSE_ENGINEERING.md)
+delay ที่เคยไล่จูนกันเป็นเพียงการเดาเพื่อชดเชยกลไกที่ยังไม่รู้จัก
 
-สมมติฐานที่ต้องพิสูจน์:
-  1. 04 18 (begin) กับ 04 35 (เข้าโหมด music) เป็นการ "เข้าโหมด" ครั้งเดียว
-     ไม่ใช่ handshake ต่อเฟรม → ถ้าจริง ตัดออกได้ 2 reports
-  2. zero flush report ต่อเฟรมอาจไม่จำเป็น → ตัดได้อีก 1
-  3. delay 8.5ms เผื่อไว้กว้างเกินจริง
+ตอนนี้จึงวัดสิ่งที่มีความหมายจริงแทน:
+  - ACK ครบทุก packet ไหม (พลาดแม้ตัวเดียวคือสัญญาณว่ากำลังจะค้าง)
+  - สตรีมต่อเนื่องได้นานแค่ไหนก่อน endpoint ค้าง
+  - FPS ที่ได้จริง
 
-วัด throughput ได้เอง แต่ **ภาพกระพริบวัดด้วยโปรแกรมไม่ได้** ต้องใช้ตาดูโหมด --visual
-(สูตรที่ throughput ผ่านแต่ภาพขาด = ใช้ไม่ได้)
-
-    python bench_fps.py            # กวาดทุกสูตร × ทุก delay
-    python bench_fps.py --visual   # โชว์แถบวิ่งทีละสูตรให้ดูด้วยตา
+    python bench_fps.py                    # soak 3 นาที ด้วย plasma
+    python bench_fps.py --seconds 600      # ยาว 10 นาที
+    python bench_fps.py --scene clock      # scene ที่ข้าม frame ซ้ำได้ = ทราฟฟิกต่ำกว่ามาก
+    python bench_fps.py --no-ack           # ปิด ACK เพื่อเทียบว่าต่างกันแค่ไหน
 """
 from __future__ import annotations
 
@@ -26,232 +26,92 @@ try:
 except Exception:
     pass
 
+from amg65 import scenes
 from amg65.device import DeviceNotFound, EndpointStalled, Link
-from amg65.matrix import HEIGHT, WIDTH, Canvas, Matrix
+from amg65.matrix import MIN_FRAME_INTERVAL, Canvas, Matrix
 
-# (ชื่อ, ส่ง header ต่อเฟรม, ส่ง flush ต่อเฟรม)
-RECIPES = (
-    ("full     ของเดิม 19 rpt", True, True),
-    ("no-flush          18 rpt", True, False),
-    ("no-hdr            17 rpt", False, True),
-    ("minimal           16 rpt", False, False),
-)
-
-DELAYS_MS = (8.5, 6.0, 4.0, 2.0, 1.0, 0.0)
+PACKETS_PER_FRAME = 19
 
 
-def bar_canvas(phase: float) -> Canvas:
-    """แถบวิ่ง — ภาพขาด/กระพริบเห็นชัดกว่าไล่สีรุ้ง."""
-    canvas = Canvas()
-    head = int(phase) % WIDTH
-    for x in range(WIDTH):
-        distance = min(abs(x - head), WIDTH - abs(x - head))
-        value = max(0, 254 - distance * 90)
-        if value:
-            for y in range(HEIGHT):
-                canvas.set(x, y, (value, value // 3, 254 - value // 2))
-    return canvas
-
-
-def run_recipe(matrix: Matrix, seconds: float, frames_source) -> tuple[float, int, bool]:
-    """คืน (FPS, จำนวนเฟรมหลุด, endpoint ค้างไหม)
-
-    endpoint ค้าง = จบการทดลอง ต้องถอดสายเสียบใหม่ก่อนทดสอบต่อ วนต่อไม่มีประโยชน์
-    """
-    frames = 0
-    drops = 0
-    started = time.perf_counter()
-    while time.perf_counter() - started < seconds:
-        try:
-            matrix.show(frames_source(frames))
-        except EndpointStalled:
-            return frames / max(1e-6, time.perf_counter() - started), drops, True
-        except OSError:
-            drops += 1
-        frames += 1
-    return frames / (time.perf_counter() - started), drops, False
-
-
-def sweep(link: Link, seconds: float) -> None:
-    print(f"{'สูตร':<26} {'delay':>7} {'FPS':>7} {'ms/เฟรม':>9} {'เฟรมหลุด':>10}")
-    print("-" * 66)
-    for name, header, flush in RECIPES:
-        for delay_ms in DELAYS_MS:
-            matrix = Matrix(
-                link,
-                packet_delay=delay_ms / 1000.0,
-                header_every_frame=header,
-                flush_every_frame=flush,
-            )
-            fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
-            mark = "  << ค้าง" if stalled else ("  << หลุด" if drops else "")
-            print(f"{name:<26} {delay_ms:>5.1f}ms {fps:>7.1f} {1000 / max(fps, 1e-6):>8.1f}ms {drops:>9}{mark}")
-            if stalled:
-                print("\nendpoint ค้าง — จบการทดลองรอบนี้ ต้องถอดสาย USB เสียบใหม่ก่อนวัดต่อ")
-                return
-    print("\nรอบนี้ผ่านหมดไม่มีอะไรค้าง — แต่การค้างเป็นแบบสุ่ม ผ่านรอบเดียวยังไม่พอตัดสิน")
-    print("ยืนยันค่าที่จะใช้จริงด้วย soak ยาว ๆ: python bench_fps.py --soak 4 --seconds 180")
-
-
-def split_sweep(link: Link, seconds: float, command_ms: float) -> None:
-    """ตรึง delay ของคำสั่งไว้ที่ค่าที่รู้ว่าปลอดภัย แล้วไล่ลดเฉพาะ delay ของข้อมูล
-
-    สมมติฐาน: RGB 15 reports แค่ยัดข้อมูลลงบัฟเฟอร์ ไม่ต้องรอเท่าคำสั่ง apply
-    ถ้าจริง ค่า data ต่ำ ๆ จะยังภาพสวยอยู่ ทั้งที่ตอนลดพร้อมกันทั้งสองค่าแล้วพัง
-
-    ต้องดูด้วยตา: อาการคือ "ดอตโผล่ผิดตำแหน่งบางจังหวะ" ซึ่งเกิดตอนเครื่องทิ้ง
-    report เงียบ ๆ แล้วข้อมูลที่เหลือเลื่อนไป 64 ไบต์ = 21.3 พิกเซล
-    """
-    matrix = Matrix(link, packet_delay=command_ms / 1000.0)
-    print(f"ตรึง delay-cmd = {command_ms} ms แล้วไล่ delay-data ช้า→เร็ว อันละ {seconds:.0f} วินาที")
-    print("ดูว่าเริ่มมี 'ดอตโผล่ผิดตำแหน่ง' ตอนช่วงที่เท่าไร\n")
-    for count in (3, 2, 1):
-        print(f"  เริ่มใน {count}...", flush=True)
-        matrix.show(bar_canvas(count * 9))
-        time.sleep(1.0)
-
-    for data_ms in sorted(DELAYS_MS, reverse=True):
-        print(f">>> delay-data {data_ms:>4.1f} ms ...", end=" ", flush=True)
-        matrix = Matrix(
-            link,
-            data_delay=data_ms / 1000.0,
-            command_delay=command_ms / 1000.0,
-        )
-        fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
-        print(f"{fps:.1f} FPS" + (f", เฟรมหลุด {drops}" if drops else ""))
-        if stalled:
-            print(f"\nendpoint ค้างที่ delay-data {data_ms} ms — จบการทดลอง ต้องถอดสายเสียบใหม่")
-            return
-        try:
-            matrix.show(Canvas())
-        except EndpointStalled:
-            print(f"\nendpoint ค้างหลังจบช่วง {data_ms} ms — ต้องถอดสายเสียบใหม่")
-            return
-        time.sleep(0.6)
-
-
-def soak(
-    link: Link,
-    delay_ms: float,
-    seconds: float,
-    lean: bool,
-    data_ms: float | None = None,
-    command_ms: float | None = None,
-) -> None:
-    """ทดสอบค่าเดียวยาว ๆ — วิธีเดียวที่เชื่อได้ เพราะการค้างเกิดแบบสุ่ม
-
-    การกวาดสั้น ๆ หลอกได้ง่าย: รอบแรกไล่ถึง delay 0 ได้โดยไม่มีอะไรค้าง
-    รอบสองพังตั้งแต่ 1.0 ms ค่าที่จะตั้งเป็น default ต้องผ่านการรันยาวก่อน
-    """
-    matrix = Matrix(
-        link,
-        packet_delay=delay_ms / 1000.0,
-        header_every_frame=not lean,
-        flush_every_frame=not lean,
-        data_delay=None if data_ms is None else data_ms / 1000.0,
-        command_delay=None if command_ms is None else command_ms / 1000.0,
+def soak(link: Link, scene_name: str, seconds: float, use_ack: bool, interval: float) -> int:
+    scene = scenes.load(scene_name)()
+    matrix = Matrix(link, use_ack=use_ack, min_frame_interval=interval)
+    print(
+        f"soak: scene={scene_name} | ACK={'เปิด' if use_ack else 'ปิด'} | "
+        f"จังหวะเฟรม {interval * 1000:.0f} ms | นาน {seconds:.0f} วินาที"
     )
-    label = (
-        f"delay {delay_ms} ms"
-        if data_ms is None and command_ms is None
-        else f"data {matrix.data_delay * 1000:.1f} ms / cmd {matrix.command_delay * 1000:.1f} ms"
-    )
-    print(f"soak: {label}, สูตร {'minimal' if lean else 'full'}, นาน {seconds:.0f} วินาที")
+    print("(ดูจอไปด้วย — โปรแกรมตรวจ 'dot ผิดตำแหน่ง' ไม่ได้ ต้องใช้ตา)\n")
+
+    scene.start()
+    sent = skipped = 0
+    last_pixels = None
     started = time.perf_counter()
-    fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
-    elapsed = time.perf_counter() - started
-    if stalled:
-        print(f"\n✗ ค้างที่วินาทีที่ {elapsed:.0f} — {label} เร็วเกินไป ใช้ไม่ได้")
-        print("  ถอดสาย USB เสียบใหม่ แล้วลองค่าที่สูงกว่านี้")
-    else:
-        print(f"\n✓ ไม่ค้างตลอด {elapsed:.0f} วินาที ที่ {fps:.1f} FPS" + (f" (เฟรมหลุด {drops})" if drops else ""))
-        print("  เหลือเรื่องที่โปรแกรมตอบไม่ได้: มีดอตโผล่ผิดตำแหน่งไหม — ต้องใช้ตาดู")
+    stalled_at = None
+    mark = 30.0
+    try:
+        while True:
+            elapsed = time.perf_counter() - started
+            if elapsed >= seconds:
+                break
+            canvas = Canvas()
+            scene.render(canvas, elapsed, sent + skipped)
+            # ข้ามเฟรมซ้ำเหมือนที่ engine ทำจริง ไม่งั้นวัดได้ทราฟฟิกสูงเกินจริง
+            if canvas.pixels == last_pixels:
+                skipped += 1
+                time.sleep(0.01)
+                continue
+            matrix.show(canvas)
+            last_pixels = list(canvas.pixels)
+            sent += 1
+            if elapsed >= mark:
+                print(
+                    f"{mark:5.0f} วิ | ส่ง {sent} ข้าม {skipped} | "
+                    f"{sent / elapsed:.1f} เฟรม/วิ | ACK พลาด {matrix.acks_missed}"
+                )
+                mark += 30.0
+    except EndpointStalled:
+        stalled_at = time.perf_counter() - started
+    except KeyboardInterrupt:
+        pass
+    finally:
+        scene.stop()
 
-
-def visual(link: Link, seconds: float, recipe: str) -> None:
-    """ไล่ delay จากเร็วสุดไปช้าสุดด้วยสูตรเดียว ให้คนดูว่าเริ่มนิ่งที่ค่าไหน
-
-    throughput บอกไม่ได้ว่าภาพกระพริบ เพราะการกระพริบเกิดฝั่งเฟิร์มแวร์
-    (เอาเฟรมที่ยังมาไม่ครบไปแสดง) ไม่ใช่ write ที่ล้มเหลว
-    """
-    header, flush = {"full": (True, True), "minimal": (False, False)}[recipe]
-    matrix = Matrix(link, packet_delay=0.0085)
-    print(f"สูตร {recipe} — ไล่ delay ช้า→เร็ว อันละ {seconds:.0f} วินาที")
-    print("ช่วงแรกคือ 8.5ms ของเดิมที่รู้ว่านิ่ง ใช้เป็นตัวเทียบ")
-    print("แล้วดูว่าแถบวิ่งเริ่ม 'ขาด/กระพริบ/สั่น' ตอนช่วงที่เท่าไร\n")
-    # ให้เวลาละสายตาจากจอคอมไปมองคีย์บอร์ดก่อน
-    for count in (3, 2, 1):
-        print(f"  เริ่มใน {count}...", flush=True)
-        matrix.show(bar_canvas(count * 9))
-        time.sleep(1.0)
-    matrix.show(Canvas())
-
-    # ช้าไปเร็ว: เห็นของดีก่อน แล้วค่อยไล่ลงจนพัง หาจุดแตกง่ายกว่าไล่ขึ้น
-    for delay_ms in sorted(DELAYS_MS, reverse=True):
-        print(f">>> delay {delay_ms:>4.1f} ms ...", end=" ", flush=True)
-        matrix = Matrix(
-            link,
-            packet_delay=delay_ms / 1000.0,
-            header_every_frame=header,
-            flush_every_frame=flush,
-        )
-        fps, drops, stalled = run_recipe(matrix, seconds, lambda i: bar_canvas(i * 1.7))
-        print(f"{fps:.1f} FPS" + (f", เฟรมหลุด {drops}" if drops else ""))
-        if stalled:
-            print(f"\nendpoint ค้างที่ delay {delay_ms} ms — จบการทดลอง ต้องถอดสายเสียบใหม่")
-            return
-        # เว้นจังหวะให้ตาแยกออกว่าจบช่วงหนึ่งแล้ว
-        try:
-            matrix.show(Canvas())
-        except EndpointStalled:
-            print(f"\nendpoint ค้างหลังจบช่วง {delay_ms} ms — ต้องถอดสายเสียบใหม่")
-            return
-        time.sleep(0.6)
+    duration = time.perf_counter() - started
+    print(
+        f"\nสรุป: ส่งจริง {sent} เฟรม (ข้าม {skipped}) / {duration:.0f} วินาที"
+        f" = {sent / max(duration, 0.01):.1f} เฟรม/วินาที"
+    )
+    print(f"      packet ที่ส่ง ~{sent * PACKETS_PER_FRAME:,} | ACK พลาด {matrix.acks_missed}")
+    if stalled_at is not None:
+        print(f"ผล: ✗ endpoint ค้างที่วินาทีที่ {stalled_at:.0f} — ถอดสาย USB เสียบใหม่")
+        return 1
+    print("ผล: ✓ ไม่ค้างตลอดการทดสอบ")
+    return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="วัดเพดาน FPS ของ AMG65 matrix stream")
-    parser.add_argument("--visual", action="store_true", help="ดูด้วยตาแทนการวัด throughput")
-    parser.add_argument("--seconds", type=float, default=2.5, help="เวลาต่อหนึ่งสูตร")
+    parser = argparse.ArgumentParser(description="วัดสุขภาพการสตรีมของ AMG65")
+    parser.add_argument("--scene", default="plasma", choices=tuple(scenes.REGISTRY))
+    parser.add_argument("--seconds", type=float, default=180.0)
+    parser.add_argument("--no-ack", action="store_true", help="ปิดการรอ ACK (เพื่อเทียบ)")
     parser.add_argument(
-        "--recipe", choices=("minimal", "full"), default="minimal",
-        help="สูตร packet ที่ใช้ตอน --visual",
+        "--frame-interval", type=float, default=MIN_FRAME_INTERVAL * 1000,
+        help="จังหวะระหว่างเฟรม (ms) — ค่าจากโปรแกรมทางการคือ 111",
     )
-    parser.add_argument(
-        "--soak", type=float, metavar="DELAY_MS",
-        help="ทดสอบ delay ค่าเดียวยาว ๆ ว่า endpoint ค้างไหม (วิธีที่เชื่อได้ที่สุด)",
-    )
-    parser.add_argument("--lean", action="store_true", help="ใช้สูตร minimal 16 reports ตอน --soak")
-    parser.add_argument(
-        "--split", action="store_true",
-        help="ตรึง delay ของคำสั่ง แล้วไล่ลดเฉพาะ delay ของข้อมูล (ต้องดูด้วยตา)",
-    )
-    parser.add_argument("--delay-data", type=float, default=None, help="หน่วงเฉพาะ RGB 15 reports (ms)")
-    parser.add_argument("--delay-cmd", type=float, default=8.5, help="หน่วงเฉพาะคำสั่ง (ms)")
     args = parser.parse_args()
 
     try:
         with Link("control") as link:
-            if args.split:
-                split_sweep(link, max(args.seconds, 6.0), args.delay_cmd)
-            elif args.soak is not None:
-                soak(
-                    link, args.soak, max(args.seconds, 30.0), args.lean,
-                    args.delay_data, args.delay_cmd if args.delay_data is not None else None,
-                )
-            elif args.visual:
-                visual(link, max(args.seconds, 6.0), args.recipe)
-            else:
-                sweep(link, args.seconds)
+            return soak(
+                link, args.scene, args.seconds,
+                not args.no_ack, args.frame_interval / 1000.0,
+            )
     except EndpointStalled as exc:
         print(f"\n{exc}")
         return 1
     except DeviceNotFound as exc:
         print(exc)
         return 1
-    except KeyboardInterrupt:
-        pass
-    return 0
 
 
 if __name__ == "__main__":

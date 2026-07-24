@@ -241,9 +241,18 @@ def cmd_upload(args: argparse.Namespace) -> int:
     try:
         if args.scene:
             kwargs = {}
-            frame_count = args.frames or bake.frames_for_loop(args.scene, render_fps) or 60
-            if args.frames is None and frame_count != 60:
+            loop_frames = bake.frames_for_loop(args.scene, render_fps)
+            frame_count = args.frames or loop_frames or 60
+            if args.frames is None and loop_frames:
                 print(f"ใช้ {frame_count} เฟรม = ความยาวลูปของ scene พอดีที่ {render_fps:.1f} FPS")
+            elif loop_frames is None and args.scene not in ("marquee", "nowplaying"):
+                # scene ที่ไม่ได้ออกแบบให้วน (เช่น pong ที่เป็นเกม) เบคแล้วเฟรมสุดท้าย
+                # ไม่ต่อเฟรมแรก ภาพจะกระโดดทุกครั้งที่วนลูป — บอกไว้ดีกว่าให้ไปงงเอง
+                print(
+                    f"⚠️  scene {args.scene!r} ไม่ได้ออกแบบให้วนลูป "
+                    "ภาพจะกระโดดตอนวนกลับ\n"
+                    "   scene ที่วนเนียน: plasma, scanner, bounce, rainbow"
+                )
             if args.scene in ("marquee", "nowplaying"):
                 if args.text:
                     kwargs["text"] = args.text
