@@ -42,6 +42,7 @@ class Tray:
         self.current = start_scene
         self.engine: Engine | None = None
         self.link: Link | None = None
+        self.sink = None
         self._error: str | None = None
         self._thread: threading.Thread | None = None
 
@@ -82,7 +83,9 @@ class Tray:
             print(f"เปิดคีย์บอร์ดไม่ได้: {exc}")
             return 1
 
-        sink = MatrixSink(Matrix(self.link, packet_delay=self.delay))
+        # resilient: endpoint หลุด/ค้าง ไม่ทำให้ tray ตาย เสียบสายกลับแล้วยิงต่อเอง
+        sink = MatrixSink(Matrix(self.link, packet_delay=self.delay), resilient=True)
+        self.sink = sink
         self.engine = Engine(sink)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -116,22 +119,27 @@ class Tray:
         )
 
         def refresh() -> None:
-            """อัปเดตไอคอนกับ tooltip ตามเฟรมจริงเป็นระยะ."""
-            last_drops = 0
-            while icon.visible and self._thread is not None and self._thread.is_alive():
-                assert self.engine is not None
-                icon.icon = _icon_image(self.engine.canvas, self.current)
-                drops = getattr(sink, "drops", 0)
-                if self._error is not None:
-                    icon.title = f"AMG65 — หยุดแล้ว: {self._error.splitlines()[0]}"
-                    return
-                if drops > last_drops:
-                    # เฟรมตกต่อเนื่อง = คีย์บอร์ดไม่อยู่ (ถอดสาย/กำลังเสียบใหม่)
-                    # ลูปวาดยังเดินอยู่และจะเปิด handle ใหม่ให้เองเมื่อเสียบกลับ
-                    icon.title = f"AMG65 — รอคีย์บอร์ด ({drops} เฟรมตก)"
-                else:
-                    icon.title = f"AMG65 — {self.current} @ {self.engine.actual_fps:.1f} FPS"
-                last_drops = drops
+            """อัปเดตไอคอนกับ tooltip ตามเฟรมจริงเป็นระยะ
+
+            ห่อทุกอย่างด้วย try/except เพราะถ้า assignment ตัวใดตัวหนึ่งพังในตัว exe
+            (เคยเจอ) แล้ว loop ตาย tooltip จะค้างที่ค่าตั้งต้นตลอดไป
+            """
+            while self._thread is not None and self._thread.is_alive():
+                try:
+                    if not icon.visible:
+                        threading.Event().wait(0.5)
+                        continue
+                    if self._error is not None:
+                        icon.title = f"AMG65 — หยุด: {self._error.splitlines()[0]}"
+                    elif self.sink is not None and not self.sink.connected:
+                        # ลูปวาดยังเดินอยู่ พอเสียบสายกลับจะยิงต่อเอง ไม่ต้องปิดแอป
+                        icon.title = "AMG65 — รอคีย์บอร์ด (เสียบสาย USB)"
+                    else:
+                        assert self.engine is not None
+                        icon.icon = _icon_image(self.engine.canvas, self.current)
+                        icon.title = f"AMG65 — {self.current} @ {self.engine.actual_fps:.0f} FPS"
+                except Exception:
+                    pass  # อัปเดตรอบนี้พลาดไม่เป็นไร รอบหน้าลองใหม่
                 threading.Event().wait(1.0)
 
         # `amg65 stop` จากอีกโปรเซสจะสั่งปิด icon อย่างสะอาด (ปิด HID ก่อนตาย)

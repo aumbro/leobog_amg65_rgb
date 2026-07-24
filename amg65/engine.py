@@ -59,21 +59,46 @@ def poll_keys() -> list[str]:
 
 
 class MatrixSink:
-    """ส่งเฟรมเข้าจอจริง."""
+    """ส่งเฟรมเข้าจอจริง
 
-    def __init__(self, matrix: Matrix) -> None:
+    `resilient=True` (สำหรับ tray ที่เปิดทั้งวัน): ถ้า endpoint ค้าง ไม่ตาย แต่พักการส่ง
+    ชั่วคราวแล้วลองเปิดใหม่เป็นระยะ พอถอดสายเสียบกลับก็ยิงต่อเองโดยไม่ต้องปิดแอป
+    การเปิด handle ใหม่ไม่ปลดล็อก endpoint ที่ค้าง (พิสูจน์แล้ว) แต่พอเสียบสายใหม่
+    HID path เปลี่ยน handle ใหม่จึงเป็นคนละอันที่ไม่ค้าง
+
+    `resilient=False` (ค่าเริ่มต้น สำหรับคำสั่ง show ที่รันครั้งเดียว): ค้าง = เลิก
+    แล้วแจ้งให้ถอดสาย เพราะวนต่อมีแต่บล็อกทีละ 1 วินาที
+    """
+
+    def __init__(self, matrix: Matrix, resilient: bool = False) -> None:
         self.matrix = matrix
+        self.resilient = resilient
         self.drops = 0
+        self.connected = True
+        self._cooldown_until = 0.0
+        self._backoff = 0.5
 
     def show(self, canvas: Canvas) -> None:
+        if self.resilient and time.perf_counter() < self._cooldown_until:
+            return  # อยู่ในช่วงพักหลังค้าง ไม่ยิงเพื่อไม่ให้บล็อกทีละวินาที
         try:
             self.matrix.show(canvas)
+            self.connected = True
+            self._backoff = 0.5
         except EndpointStalled:
-            # ค้างแล้วไม่มีทางกลับมาเองจนกว่าจะถอดสาย — วนต่อมีแต่ค้างทีละ 1 วินาที
-            raise
-        except OSError:
-            # เฟรมเดียวหายดีกว่าโปรแกรมตาย — เฟรมถัดไปจะเข้าโหมด stream ใหม่เอง
+            if not self.resilient:
+                raise
+            # ค้าง: ปิด handle แล้วพักก่อนลองใหม่ ยิ่งค้างซ้ำยิ่งพักนานขึ้น (สูงสุด 5 วิ)
+            self.matrix.link.close()
+            self.connected = False
             self.drops += 1
+            self._cooldown_until = time.perf_counter() + self._backoff
+            self._backoff = min(self._backoff * 1.6, 5.0)
+        except OSError:
+            # หลุด/ถอดสาย: เฟรมเดียวหายดีกว่าตาย เฟรมหน้าเปิด handle ใหม่ให้เอง
+            self.drops += 1
+            if self.resilient:
+                self.connected = False
 
     def close(self) -> None:
         self.matrix.link.close()
