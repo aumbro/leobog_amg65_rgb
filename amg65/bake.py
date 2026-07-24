@@ -159,6 +159,48 @@ def frames_for_loop(scene_name: str, play_fps: float) -> int | None:
     return max(1, min(MAX_FRAMES, round(loop_seconds * play_fps)))
 
 
+def loopable_scenes() -> list[str]:
+    """scene ที่เบคเก็บลงเครื่องแล้ววนได้เนียน (มี loop_seconds)."""
+    from . import scenes
+
+    names = []
+    for name in scenes.REGISTRY:
+        try:
+            if scenes.load(name).loop_seconds:
+                names.append(name)
+        except (KeyError, ImportError):
+            continue
+    return names
+
+
+def plan_upload(scene_name: str, max_chunks: int = None) -> tuple[int, float] | None:
+    """เลือกจำนวนเฟรมกับ FPS ที่ดีที่สุดสำหรับ scene นี้ ภายในขนาดที่ปลอดภัย
+
+    คืน (จำนวนเฟรม, FPS ที่จะเล่น) หรือ None ถ้า scene นั้นวนไม่ได้
+
+    ตรรกะ: อยากได้ FPS สูงที่สุดเท่าที่ยังไม่เกินขนาดปลอดภัย เพราะภาพยิ่งลื่นยิ่งดี
+    แต่ลูปยาวเท่าเดิมเสมอ (= loop_seconds ของ scene) จึงลด FPS ลงถ้าเฟรมเกินโควตา
+    """
+    from . import scenes
+
+    if max_chunks is None:
+        max_chunks = SAFE_CHUNKS
+    try:
+        loop_seconds = scenes.load(scene_name).loop_seconds
+    except (KeyError, ImportError):
+        return None
+    if not loop_seconds:
+        return None
+
+    # เฟรมสูงสุดที่ยังอยู่ในขนาดปลอดภัย
+    budget = min(MAX_FRAMES, int((max_chunks * 4096 - 6) / (WIDTH * HEIGHT * 3)))
+    for fps in (30.0, 25.0, 20.0, 15.0, 12.0, 10.0, 8.0, 6.0, 4.0):
+        frames = round(loop_seconds * fps)
+        if 1 <= frames <= budget:
+            return frames, fps
+    return max(1, budget), budget / loop_seconds
+
+
 def seamless_scroll_speed(text: str, frame_count: int, play_fps: float) -> float | None:
     """ความเร็วเลื่อน (px/วินาที) ที่ทำให้ข้อความวนครบรอบพอดีในจำนวนเฟรมที่มี
 
