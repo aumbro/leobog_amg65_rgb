@@ -346,16 +346,23 @@ class Matrix:
         init = bytearray(64)
         init[0:2] = CMD_UPLOAD
         init[8] = (len(payload) + 4095) // 4096
-        self.link.send(self._begin_payload())
-        self.link.send(init)
+        if self.use_ack:
+            self.link.drain()
+        self._step(self._begin_payload(), self.command_delay)
+        self._step(init, self.command_delay)
+
         chunks = (len(payload) + 4095) // 4096
         for index, offset in enumerate(range(0, len(payload), 4096)):
             bulk.send(payload[offset : offset + 4096])
             if on_progress is not None:
                 on_progress(index + 1, chunks)
-            # report ใหญ่ต้องมีเวลาระบายผ่าน endpoint; โปรแกรมทางการเว้น ~160-167ms
-            # ⚠️ MI_03 ค้างได้เหมือน MI_02 ถ้าส่งถี่เกิน และเป็นแบบสุ่ม —
-            # 59 ก้อนเคยผ่าน แต่ 58 ก้อนเคยค้าง เพิ่มค่านี้ถ้าเจอบ่อย
+            # ก้อนใหญ่ 4KB ต้องมีเวลาระบาย โปรแกรมทางการเว้น ~160-167ms
+            # ⚠️ ก้อนข้อมูลไปทาง MI_03 แต่คำตอบมาทาง MI_02 (คนละช่อง) จึงอ่าน ACK
+            # จาก link ไม่ใช่ bulk — ถ้าได้คำตอบก็ไม่ต้องหน่วงเต็มเวลา
+            if self.use_ack and self.link.read_ack(timeout_ms=int(chunk_delay * 1000)):
+                continue
+            if self.use_ack:
+                self.acks_missed += 1
             time.sleep(chunk_delay)
-        self.link.send(CMD_APPLY)
-        self.link.send(CMD_FINALIZE)
+        self._step(CMD_APPLY, self.command_delay)
+        self._step(CMD_FINALIZE, 0.0)

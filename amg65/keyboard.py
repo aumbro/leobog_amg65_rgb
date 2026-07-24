@@ -12,6 +12,11 @@ from .device import CMD_APPLY, CMD_BEGIN, CMD_EFFECT, CMD_FINALIZE, CMD_PER_KEY,
 
 COMMAND_DELAY = 0.200
 
+# จังหวะระหว่างรอบของไฟรายปุ่มตอน --hold (live preview ต้องส่งซ้ำไม่งั้นไฟดับ)
+# ใช้ค่าเดียวกับ matrix เพราะเป็น endpoint เดียวกัน (MI_02) และเจอปัญหาแบบเดียวกัน
+# ยิงรัวติดกัน = คำตอบค้างคิว = endpoint ค้าง
+MIN_ROUND_INTERVAL = 0.111
+
 MODES = {
     "off": 0, "static": 1, "single-on": 2, "single-off": 3, "glittering": 4,
     "falling": 5, "colourful": 6, "breath": 7, "spectrum": 8, "outward": 9,
@@ -50,12 +55,28 @@ LIGHT_ORDER = (
 
 
 class KeyboardLight:
-    def __init__(self, link: Link) -> None:
+    def __init__(self, link: Link, use_ack: bool = True) -> None:
         self.link = link
+        self.use_ack = use_ack
+        self.acks_missed = 0
 
     def _step(self, payload: bytes | bytearray, delay: float = COMMAND_DELAY) -> None:
+        """ส่งหนึ่ง report แล้วรอให้เครื่องตอบรับ
+
+        ช่องนี้เป็น endpoint เดียวกับ matrix (MI_02) จึงใช้กลไก request/response
+        เหมือนกัน — เครื่องตอบรับทุก report และต้องรอก่อนส่งตัวถัดไป
+        ถ้าไม่รอแล้วยิงรัว (โดยเฉพาะ `keys --hold` ที่เป็น live stream เหมือนกัน)
+        คำตอบจะค้างสะสมในคิวจน endpoint ค้าง — ปัญหาเดียวกับที่แก้ไปใน matrix.py
+
+        delay ที่ส่งเข้ามาเป็นแค่ตาข่ายกันตกตอนเครื่องไม่ตอบ
+        """
         self.link.send(payload)
-        time.sleep(delay)
+        if self.use_ack:
+            if self.link.read_ack():
+                return
+            self.acks_missed += 1
+        if delay > 0:
+            time.sleep(delay)
 
     def set_effect(
         self,
@@ -109,7 +130,17 @@ class KeyboardLight:
         init[0:2] = CMD_PER_KEY
         init[8] = 0x08
 
+        if self.use_ack:
+            self.link.drain()  # ล้าง ACK เก่าค้างคิวก่อนเริ่ม ไม่งั้นจังหวะเพี้ยน
+
+        next_round = 0.0
         while True:
+            # เว้นจังหวะระหว่างรอบเหมือน matrix — ยิงรัวติดกันทำให้ endpoint ค้าง
+            wait = next_round - time.perf_counter()
+            if wait > 0:
+                time.sleep(wait)
+            next_round = time.perf_counter() + MIN_ROUND_INTERVAL
+
             if randomize:
                 for slot, index in enumerate(LIGHT_ORDER):
                     table[slot * 4 : slot * 4 + 4] = bytes(
