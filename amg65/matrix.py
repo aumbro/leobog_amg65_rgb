@@ -273,6 +273,19 @@ class Matrix:
             "  ถ้าเกิดบ่อย ให้ถอดสาย USB เสียบใหม่"
         )
 
+    def end_stream(self) -> None:
+        """ปิดโหมด live stream ให้เรียบร้อย
+
+        จำเป็นก่อนสลับไปทำอย่างอื่น (เช่นอัปโหลด) — ถ้าไม่ปิด สถานะโหมด music
+        ยังค้างอยู่ ทำให้ภาพที่อัปโหลดไม่ถูกแสดง จอกลับไปเป็นเอฟเฟกต์เดิมของคีย์บอร์ดแทน
+        """
+        self._stream_ready = False
+        try:
+            self._step(CMD_APPLY, self.command_delay)
+            self._step(CMD_FINALIZE, self.command_delay)
+        except OSError:
+            pass  # ปิดไม่สำเร็จก็ไม่เป็นไร ขั้นตอนถัดไปจะเปิด handle ใหม่อยู่แล้ว
+
     def enter_stream(self) -> None:
         """เข้าโหมด stream ครั้งเดียว (ใช้ตอน header_every_frame = False)."""
         if self.use_ack:

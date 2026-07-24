@@ -81,13 +81,21 @@ class Tray:
             except (KeyError, ImportError) as exc:
                 self._error = str(exc)
                 return
+            was_stored = self.mode == "stored"
             self.current = name
             self.mode = "stream"
             if self._thread is not None and self._thread.is_alive():
                 assert self.engine is not None
                 self.engine.request(scene)
-            else:
-                self._start_worker(scene)  # เคยหยุดไปตอนอัปโหลด ต้องปลุกใหม่
+                return
+            # เคยหยุดไปตอนอัปโหลด — เปิด handle ใหม่ให้เริ่มสะอาดก่อนปลุก worker
+            if was_stored and self.link is not None:
+                try:
+                    self.link.reopen(timeout=3.0)
+                except (OSError, DeviceNotFound):
+                    self.status = "เปิดคีย์บอร์ดใหม่ไม่ได้"
+                    return
+            self._start_worker(scene)
 
         return handler
 
@@ -115,9 +123,18 @@ class Tray:
 
         self.status = f"กำลังเก็บ {name} ลงเครื่อง..."
         self._stop_worker()
+        assert self.sink is not None and self.link is not None
+        # ปิดโหมดสตรีมแล้วเปิด handle ใหม่ ให้เริ่มจากสถานะสะอาดเหมือนรันจาก CLI สด ๆ
+        # ถ้าไม่ทำ สถานะโหมด music ค้างอยู่ ภาพที่อัปโหลดจะไม่ถูกแสดง
+        # จอกลับไปเป็นเอฟเฟกต์เดิมของคีย์บอร์ดแทน
+        self.sink.matrix.end_stream()
+        try:
+            self.link.reopen(timeout=3.0)
+        except (OSError, DeviceNotFound):
+            self.status = "เปิดคีย์บอร์ดใหม่ไม่ได้"
+            return
         try:
             frames = bake.frames_from_scene(name, frames_count, fps)
-            assert self.sink is not None
             with Link("bulk") as bulk:
                 self.sink.matrix.upload_animation(
                     bulk, frames, speed=matrix_speed_for(fps)
