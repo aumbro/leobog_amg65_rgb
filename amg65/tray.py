@@ -51,13 +51,16 @@ class Tray:
         self.engine: Engine | None = None
         self.link: Link | None = None
         self.sink = None
-        self.mode = "stream"          # "stream" = ยิงสด, "stored" = เก็บลงเครื่องแล้ว
+        self.mode = "stream"          # stream=ยิงสด, stored=เก็บลงเครื่อง, keyfx=ไฟใต้ปุ่ม
         self.stored: str | None = None
+        self.keyfx_name: str | None = None
         self.status: str | None = None
         self._error: str | None = None
         self._pending_scene = None
         self._closing = False
         self._thread: threading.Thread | None = None
+        self._keyfx_thread: threading.Thread | None = None
+        self._keyfx_stop: threading.Event | None = None
 
     # ---------- ลูปวาด ----------
 
@@ -81,15 +84,16 @@ class Tray:
             except (KeyError, ImportError) as exc:
                 self._error = str(exc)
                 return
-            was_stored = self.mode == "stored"
+            was_offline = self.mode in ("stored", "keyfx")
+            self._stop_keyfx()
             self.current = name
             self.mode = "stream"
             if self._thread is not None and self._thread.is_alive():
                 assert self.engine is not None
                 self.engine.request(scene)
                 return
-            # เคยหยุดไปตอนอัปโหลด — เปิด handle ใหม่ให้เริ่มสะอาดก่อนปลุก worker
-            if was_stored and self.link is not None:
+            # เคยหยุดไปตอนอัปโหลด/ไฟใต้ปุ่ม — เปิด handle ใหม่ให้เริ่มสะอาดก่อนปลุก worker
+            if was_offline and self.link is not None:
                 try:
                     self.link.reopen(timeout=3.0)
                 except (OSError, DeviceNotFound):
@@ -111,6 +115,59 @@ class Tray:
 
         return handler
 
+    def _select_keyfx(self, name: str):
+        """เลือกเอฟเฟกต์ไฟใต้ปุ่ม — ใช้ MI_02 เหมือน matrix จึงต้องหยุด matrix ก่อน."""
+
+        def handler(icon, item) -> None:
+            threading.Thread(target=self._do_keyfx, args=(name,), daemon=True).start()
+
+        return handler
+
+    def _do_keyfx(self, name: str) -> None:
+        from . import keyfx
+        from .device import DeviceNotFound, EndpointStalled
+        from .keyboard import KeyboardLight
+
+        try:
+            effect = keyfx.EFFECTS[name]()
+        except (KeyError, ImportError) as exc:
+            self.status = f"เอฟเฟกต์ {name} เปิดไม่ได้: {exc}"
+            return
+
+        self._stop_worker()          # หยุด matrix (ใช้ MI_02 ช่องเดียวกัน)
+        self._stop_keyfx()           # เผื่อมี keyfx ตัวเก่ารันอยู่
+        assert self.sink is not None and self.link is not None
+        self.sink.matrix.end_stream()  # ปิดโหมด stream ให้เริ่มสะอาด
+        try:
+            self.link.reopen(timeout=3.0)
+        except (OSError, DeviceNotFound):
+            self.status = "เปิดคีย์บอร์ดใหม่ไม่ได้"
+            return
+
+        self.mode = "keyfx"
+        self.keyfx_name = name
+        self._keyfx_stop = threading.Event()
+        stop_event = self._keyfx_stop
+
+        def run() -> None:
+            try:
+                KeyboardLight(self.link).stream_effect(
+                    effect, should_stop=stop_event.is_set
+                )
+            except (EndpointStalled, DeviceNotFound, OSError) as exc:
+                self.status = f"ไฟใต้ปุ่มหยุด: {str(exc).splitlines()[0]}"
+
+        self._keyfx_thread = threading.Thread(target=run, daemon=True)
+        self._keyfx_thread.start()
+
+    def _stop_keyfx(self) -> None:
+        if self._keyfx_stop is not None:
+            self._keyfx_stop.set()
+        if self._keyfx_thread is not None:
+            self._keyfx_thread.join(timeout=2.0)
+        self._keyfx_thread = None
+        self._keyfx_stop = None
+
     def _do_store(self, name: str) -> None:
         from . import bake
         from .device import DeviceNotFound, EndpointStalled, Link
@@ -123,6 +180,7 @@ class Tray:
 
         self.status = f"กำลังเก็บ {name} ลงเครื่อง..."
         self._stop_worker()
+        self._stop_keyfx()
         assert self.sink is not None and self.link is not None
         # ปิดโหมดสตรีมแล้วเปิด handle ใหม่ ให้เริ่มจากสถานะสะอาดเหมือนรันจาก CLI สด ๆ
         # ถ้าไม่ทำ สถานะโหมด music ค้างอยู่ ภาพที่อัปโหลดจะไม่ถูกแสดง
@@ -227,9 +285,28 @@ class Tray:
                 )
             )
 
+        # ไฟใต้ปุ่ม 67 ดวง — ใช้ MI_02 เหมือน matrix จึงเป็นคนละโหมด
+        from . import keyfx
+
+        keyfx_labels = {
+            "spectrum": "spectrum — เต้นตามเสียง",
+            "wave": "wave — คลื่นสีรุ้ง",
+            "ripple": "ripple — ระลอกวงกลม",
+        }
+        keyfx_items = [
+            pystray.MenuItem(
+                keyfx_labels.get(name, name),
+                self._select_keyfx(name),
+                checked=lambda item, n=name: self.mode == "keyfx" and self.keyfx_name == n,
+                radio=True,
+            )
+            for name in keyfx.EFFECTS
+        ]
+
         menu_items = [
-            pystray.MenuItem("สตรีมสด (ข้อมูลจริง)", pystray.Menu(*stream_items)),
-            pystray.MenuItem("เก็บลงเครื่อง (ลื่นกว่า/ไม่หลุด)", pystray.Menu(*store_items)),
+            pystray.MenuItem("จอ: สตรีมสด (ข้อมูลจริง)", pystray.Menu(*stream_items)),
+            pystray.MenuItem("จอ: เก็บลงเครื่อง (ลื่นกว่า/ไม่หลุด)", pystray.Menu(*store_items)),
+            pystray.MenuItem("ไฟใต้ปุ่ม", pystray.Menu(*keyfx_items)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("ออก", lambda icon, item: icon.stop()),
         ]
@@ -259,6 +336,8 @@ class Tray:
                         # ข้อความชั่วคราว (กำลังอัปโหลด/ผลลัพธ์) โชว์แล้วเคลียร์
                         if not self.status.startswith("กำลัง"):
                             self.status = None
+                    elif self.mode == "keyfx":
+                        icon.title = f"AMG65 — ไฟใต้ปุ่ม: {self.keyfx_name}"
                     elif self.mode == "stored":
                         icon.title = f"AMG65 — เก็บ {self.stored} ลงเครื่องแล้ว (เล่นเอง)"
                     elif self._error is not None:
@@ -283,6 +362,7 @@ class Tray:
         icon.run()
 
         self._closing = True
+        self._stop_keyfx()
         if self.engine is not None:
             self.engine.shutdown()
         if self._thread is not None:

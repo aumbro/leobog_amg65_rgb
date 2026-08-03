@@ -167,11 +167,14 @@ class KeyboardLight:
             r, g, b = by_index.get(index, (0, 0, 0))
             table[slot * 4 : slot * 4 + 4] = bytes((index, r, g, b))
 
-    def stream_effect(self, effect, fps: float = 9.0, stream_delay: float = 0.025) -> None:
-        """สตรีมเอฟเฟกต์ไฟใต้ปุ่มต่อเนื่องจนกด Ctrl+C
+    def stream_effect(
+        self, effect, fps: float = 9.0, stream_delay: float = 0.025, should_stop=None
+    ) -> None:
+        """สตรีมเอฟเฟกต์ไฟใต้ปุ่มต่อเนื่องจนกด Ctrl+C หรือ should_stop() คืน True
 
         `effect` ต้องมี start() / stop() / colors(elapsed) -> {ชื่อปุ่ม: (r,g,b)}
         (ดู amg65/keyfx.py)
+        `should_stop` = callable ให้ tray สั่งหยุดข้าม thread ได้ (ไม่ใส่ = วนจน Ctrl+C)
 
         จังหวะระหว่างรอบใช้หลักเดียวกับ matrix — ยิงติดกันเกินไปทำให้ endpoint ค้าง
         รอบหนึ่งมี 9 packet (init + 8) ซึ่งน้อยกว่า matrix (19) จึงเร็วกว่าได้
@@ -189,7 +192,7 @@ class KeyboardLight:
             self.link.drain()
         started = time.perf_counter()
         try:
-            while True:
+            while should_stop is None or not should_stop():
                 loop_start = time.perf_counter()
                 self._fill_table(table, effect.colors(loop_start - started))
                 self._write_table(table, init, stream_delay)
