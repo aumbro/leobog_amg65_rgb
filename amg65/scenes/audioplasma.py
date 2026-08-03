@@ -74,14 +74,15 @@ class AudioPlasmaScene(Scene):
         else:
             bass = overall = 0.0
 
-        # พลังงานตามเสียงแบบเรียบ (ขึ้นไว ลงช้า) กันกระตุก
-        self._energy += (overall - self._energy) * (0.5 if overall > self._energy else 0.08)
-        # คลื่นไหลเร็วขึ้นตอนเบสมา — ฐาน 0.35 รอบ/วิ + เบสเร่งได้อีกเท่าตัว
-        self._phase += dt * (0.35 + bass * 2.2) * TAU
+        # พลังงานตามเสียงแบบเรียบ (ขึ้นไว ลงช้า) กันกระตุก — ทำให้ลื่นขึ้นด้วยการลง
+        # ช้ากว่าเดิม ไม่ให้สีวูบดับเร็วเกินตอนจังหวะเบา
+        self._energy += (overall - self._energy) * (0.35 if overall > self._energy else 0.05)
+        # คลื่นไหลช้า ๆ — ฐาน 0.09 รอบ/วิ (คลื่นครบรอบทุก ~11 วิ) เบสเร่งเบา ๆ
+        self._phase += dt * (0.09 + bass * 0.6) * TAU
 
-        # เพลงดัง = สีสดและความสว่างเต็ม, เงียบ = ซีดลงแต่ยังเห็นคลื่นจาง ๆ
-        hue_shift = self._energy * 0.6
-        brightness = 0.35 + 0.65 * min(1.0, self._energy * 1.6)
+        # สีค่อย ๆ เลื่อนช้ามาก ให้เฉดไหลนุ่ม ไม่กระโดด
+        hue_shift = self._energy * 0.12
+        brightness = 0.4 + 0.6 * min(1.0, self._energy * 1.6)
 
         p = self._phase
         pixels = canvas.pixels
