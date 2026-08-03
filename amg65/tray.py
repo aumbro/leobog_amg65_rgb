@@ -54,6 +54,7 @@ class Tray:
         self.mode = "stream"          # stream=ยิงสด, stored=เก็บลงเครื่อง, keyfx=ไฟใต้ปุ่ม
         self.stored: str | None = None
         self.keyfx_name: str | None = None
+        self.combo_name: str | None = None
         # keyfx เร็วกว่าจอ (ไม่มีข้อจำกัด repaint 111ms) วัดได้ถึง 40 FPS ไม่ค้าง
         # ตั้ง 20 เป็นค่าลื่นพอที่ไม่ดันสุด เหลือ headroom
         self.keyfx_fps = 20.0
@@ -87,7 +88,7 @@ class Tray:
             except (KeyError, ImportError) as exc:
                 self._error = str(exc)
                 return
-            was_offline = self.mode in ("stored", "keyfx")
+            was_offline = self.mode in ("stored", "keyfx", "combo")
             self._stop_keyfx()
             self.current = name
             self.mode = "stream"
@@ -125,6 +126,52 @@ class Tray:
             threading.Thread(target=self._do_keyfx, args=(name,), daemon=True).start()
 
         return handler
+
+    def _select_combo(self, scene_name: str, keyfx_name: str):
+        """เลือก combo — จอ scene + ไฟใต้ปุ่มพร้อมกัน (ใช้ MI_02 ช่องเดียว)."""
+
+        def handler(icon, item) -> None:
+            threading.Thread(
+                target=self._do_combo, args=(scene_name, keyfx_name), daemon=True
+            ).start()
+
+        return handler
+
+    def _do_combo(self, scene_name: str, keyfx_name: str) -> None:
+        from . import keyfx, scenes
+        from .combo import ComboPlayer
+        from .device import DeviceNotFound, EndpointStalled
+
+        try:
+            scene = scenes.load(scene_name)()
+            effect = keyfx.EFFECTS[keyfx_name]()
+        except (KeyError, ImportError) as exc:
+            self.status = f"combo เปิดไม่ได้: {exc}"
+            return
+
+        self._stop_worker()
+        self._stop_keyfx()
+        assert self.sink is not None and self.link is not None
+        self.sink.matrix.end_stream()
+        try:
+            self.link.reopen(timeout=3.0)
+        except (OSError, DeviceNotFound):
+            self.status = "เปิดคีย์บอร์ดใหม่ไม่ได้"
+            return
+
+        self.mode = "combo"
+        self.combo_name = f"{scene_name}+{keyfx_name}"
+        self._keyfx_stop = threading.Event()
+        stop_event = self._keyfx_stop
+
+        def run() -> None:
+            try:
+                ComboPlayer(self.link, scene, effect).run(should_stop=stop_event.is_set)
+            except (EndpointStalled, DeviceNotFound, OSError) as exc:
+                self.status = f"combo หยุด: {str(exc).splitlines()[0]}"
+
+        self._keyfx_thread = threading.Thread(target=run, daemon=True)
+        self._keyfx_thread.start()
 
     def _do_keyfx(self, name: str) -> None:
         from . import keyfx
@@ -308,10 +355,30 @@ class Tray:
             for name in keyfx.EFFECTS
         ]
 
+        # combo: จอ + ไฟใต้ปุ่มพร้อมกัน — ชุดที่จับคู่ให้ลงตัวไว้แล้ว
+        combo_presets = [
+            ("audioplasma", "spectrum", "เต้นตามเพลง (จอ+ปุ่ม)"),
+            ("plasma", "wave", "คลื่นสีนุ่ม ๆ"),
+            ("scanner", "ripple", "แถบกวาด + ระลอก"),
+            ("rainbow", "wave", "รุ้งทั้งจอทั้งปุ่ม"),
+        ]
+        combo_items = [
+            pystray.MenuItem(
+                label,
+                self._select_combo(scene_name, keyfx_name),
+                checked=lambda item, s=scene_name, k=keyfx_name: (
+                    self.mode == "combo" and self.combo_name == f"{s}+{k}"
+                ),
+                radio=True,
+            )
+            for scene_name, keyfx_name, label in combo_presets
+        ]
+
         menu_items = [
             pystray.MenuItem("จอ: สตรีมสด (ข้อมูลจริง)", pystray.Menu(*stream_items)),
             pystray.MenuItem("จอ: เก็บลงเครื่อง (ลื่นกว่า/ไม่หลุด)", pystray.Menu(*store_items)),
             pystray.MenuItem("ไฟใต้ปุ่ม", pystray.Menu(*keyfx_items)),
+            pystray.MenuItem("combo (จอ+ปุ่มพร้อมกัน)", pystray.Menu(*combo_items)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("ออก", lambda icon, item: icon.stop()),
         ]
@@ -341,6 +408,8 @@ class Tray:
                         # ข้อความชั่วคราว (กำลังอัปโหลด/ผลลัพธ์) โชว์แล้วเคลียร์
                         if not self.status.startswith("กำลัง"):
                             self.status = None
+                    elif self.mode == "combo":
+                        icon.title = f"AMG65 — combo: {self.combo_name}"
                     elif self.mode == "keyfx":
                         icon.title = f"AMG65 — ไฟใต้ปุ่ม: {self.keyfx_name}"
                     elif self.mode == "stored":
