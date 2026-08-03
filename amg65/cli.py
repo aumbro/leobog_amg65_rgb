@@ -194,6 +194,39 @@ def cmd_keyfx(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_combo(args: argparse.Namespace) -> int:
+    """เล่นจอ scene + ไฟใต้ปุ่มพร้อมกัน"""
+    from . import keyfx, scenes
+    from .combo import ComboPlayer
+
+    try:
+        scene = scenes.load(args.scene)()
+        effect = keyfx.EFFECTS[args.keyfx]()
+    except (KeyError, ImportError) as exc:
+        print(f"โหลดไม่ได้: {exc}")
+        return 2
+
+    print(f"combo: จอ={args.scene} + ปุ่ม={args.keyfx} ที่ {args.fps:.0f} FPS — Ctrl+C เพื่อออก")
+    try:
+        with Link("control") as link:
+            player = ComboPlayer(link, scene, effect)
+            try:
+                player.run(fps=args.fps)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                KeyboardLight(link).set_per_key({})
+            if player.acks_missed:
+                print(f"ACK พลาด {player.acks_missed}")
+    except EndpointStalled as exc:
+        print(f"\n{exc}")
+        return 1
+    except (OSError, DeviceNotFound) as exc:
+        print(f"\nเปิดคีย์บอร์ดไม่ได้: {exc}")
+        return 1
+    return 0
+
+
 def cmd_settime(args: argparse.Namespace) -> int:
     """ซิงค์เวลาเข้า RTC ของคีย์บอร์ด"""
     import datetime
@@ -415,6 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--lean", action="store_true", help="ตัด header/flush ต่อเฟรม (เร็วขึ้น ดู bench_fps.py)")
     p_show.set_defaults(func=cmd_show)
 
+    p_combo = sub.add_parser("combo", help="จอ scene + ไฟใต้ปุ่มพร้อมกัน")
+    p_combo.add_argument("--scene", default="plasma", choices=tuple(scenes.REGISTRY))
+    p_combo.add_argument("--keyfx", default="wave", choices=("spectrum", "wave", "ripple"))
+    p_combo.add_argument("--fps", type=float, default=13.0, help="รอบคู่ต่อวินาที")
+    p_combo.set_defaults(func=cmd_combo)
+
     p_keyfx = sub.add_parser("keyfx", help="ไฟใต้ปุ่ม 67 ดวงเต้นตามเสียง / คลื่นสี")
     p_keyfx.add_argument("effect", nargs="?", default="spectrum", choices=("spectrum", "wave", "ripple"))
     p_keyfx.add_argument("--fps", type=float, default=20.0, help="รอบต่อวินาที (สูงสุด ~40)")
@@ -493,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # คำสั่งที่เขียนเข้าอุปกรณ์จริง ต้องมีตัวเดียวในระบบ
-_EXCLUSIVE = {"show", "tray", "upload", "keys", "keyfx", "light", "set-time"}
+_EXCLUSIVE = {"show", "tray", "upload", "keys", "keyfx", "combo", "light", "set-time"}
 
 
 def main(argv: list[str] | None = None) -> int:
