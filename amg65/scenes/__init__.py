@@ -18,6 +18,7 @@ REGISTRY: dict[str, tuple[str, str, str, str]] = {
     "scanner": (".loops", "ScannerScene", "แถบไฟกวาดไปมามีหางจาง วนลูปเนียน", ""),
     "bounce": (".loops", "BounceScene", "ลูกบอลเด้งทิ้งหางสีรุ้ง วนลูปเนียน", ""),
     "vis": (".vis", "VisualizerScene", "spectrum เต้นตามเสียงที่ลำโพงกำลังเล่น", "soundcard, numpy"),
+    "audioplasma": (".audioplasma", "AudioPlasmaScene", "plasma ที่สี/ความเร็วเต้นตามเพลง", "soundcard, numpy"),
     "nowplaying": (".nowplaying", "NowPlayingScene", "ชื่อเพลงวิ่ง + progress bar จาก SMTC", "winsdk"),
     "marquee": (".nowplaying", "MarqueeScene", "ข้อความวิ่งอะไรก็ได้ (--text)", ""),
     "sysmon": (".sysmon", "SysmonScene", "CPU / RAM / เน็ต เป็นบาร์", "psutil"),
