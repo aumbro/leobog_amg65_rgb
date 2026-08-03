@@ -417,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_keyfx = sub.add_parser("keyfx", help="ไฟใต้ปุ่ม 67 ดวงเต้นตามเสียง / คลื่นสี")
     p_keyfx.add_argument("effect", nargs="?", default="spectrum", choices=("spectrum", "wave", "ripple"))
-    p_keyfx.add_argument("--fps", type=float, default=9.0, help="รอบต่อวินาที")
+    p_keyfx.add_argument("--fps", type=float, default=20.0, help="รอบต่อวินาที (สูงสุด ~40)")
     p_keyfx.set_defaults(func=cmd_keyfx)
 
     p_settime = sub.add_parser("set-time", help="ซิงค์เวลาเข้านาฬิกาในคีย์บอร์ด (RTC)")

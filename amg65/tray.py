@@ -54,6 +54,9 @@ class Tray:
         self.mode = "stream"          # stream=ยิงสด, stored=เก็บลงเครื่อง, keyfx=ไฟใต้ปุ่ม
         self.stored: str | None = None
         self.keyfx_name: str | None = None
+        # keyfx เร็วกว่าจอ (ไม่มีข้อจำกัด repaint 111ms) วัดได้ถึง 40 FPS ไม่ค้าง
+        # ตั้ง 20 เป็นค่าลื่นพอที่ไม่ดันสุด เหลือ headroom
+        self.keyfx_fps = 20.0
         self.status: str | None = None
         self._error: str | None = None
         self._pending_scene = None
@@ -149,10 +152,12 @@ class Tray:
         self._keyfx_stop = threading.Event()
         stop_event = self._keyfx_stop
 
+        fps = self.keyfx_fps
+
         def run() -> None:
             try:
                 KeyboardLight(self.link).stream_effect(
-                    effect, should_stop=stop_event.is_set
+                    effect, fps=fps, should_stop=stop_event.is_set
                 )
             except (EndpointStalled, DeviceNotFound, OSError) as exc:
                 self.status = f"ไฟใต้ปุ่มหยุด: {str(exc).splitlines()[0]}"
