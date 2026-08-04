@@ -26,6 +26,11 @@
 >   Uploading an animation into the device is therefore ~15× smoother than streaming,
 >   and it keeps playing with no host process running at all.
 >
+> **Features:** matrix scenes (clock, audio-reactive plasma, system monitor, games),
+> per-key RGB effects that react to music, both running **simultaneously**, animations
+> baked into the device's own memory (plays with no host process), and setting the
+> keyboard's built-in RTC clock. All driven from a system-tray app or the CLI.
+>
 > Quick start: `pip install -r requirements.txt`, then `python -m amg65 doctor`,
 > `python -m amg65 list`, `python -m amg65 show clock`.
 > Full documentation below is in Thai. MIT licensed.
@@ -220,6 +225,16 @@ python -m amg65 upload some.gif --preview --no-upload  # ดูในเทอ�
 แอนิเมชันหลายเฟรมต่อจากภาพนิ่งเฟรมเดียว ยิงซ้ำแล้วหาย
 
 ใช้กับ scene ที่ต้องการข้อมูลสด (`clock` `vis` `sysmon` `nowplaying`) ไม่ได้ — ต้องเป็นลูปที่วนซ้ำได้
+
+## combo — จอ + ไฟใต้ปุ่มพร้อมกัน
+
+จอ LCD กับไฟใต้ปุ่ม 67 ดวงเป็นฮาร์ดแวร์คนละส่วน เล่นพร้อมกันได้ (สลับส่งบน MI_02
+ช่องเดียว รอ ACK เหมือนเดิม) เลือกจากเมนู tray หรือสั่งเอง:
+
+```bash
+python -m amg65 combo --scene audioplasma --keyfx spectrum   # เต้นตามเพลงทั้งคู่
+python -m amg65 combo --scene plasma --keyfx wave
+```
 
 ## ไฟใต้ปุ่มเต้นตามเสียง
 
